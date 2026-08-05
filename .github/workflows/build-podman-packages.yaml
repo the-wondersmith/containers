@@ -72,7 +72,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `arch` MUST be a real matrix dimension, not something contributed only
+        # by `include`. An `include` entry that does not overwrite an original
+        # matrix value is applied to *every* combination, so listing the two
+        # arches there alone produced 5 jobs rather than 10 -- both entries
+        # applied to all five components and the second won, leaving everything
+        # on aarch64. Nothing failed loudly: the x86_64 components simply never
+        # built, and the error surfaced two jobs later as a missing .apk in the
+        # packaging steps.
         component: [catatonit, netavark, aardvark-dns, buildah, podman]
+        arch: [x86_64, aarch64]
+        # Now that `arch` is an original value, these attach a runner to the
+        # existing combinations that already match on it.
         include:
           - arch: x86_64
             runner: ubuntu-latest
@@ -418,6 +429,32 @@ jobs:
           # The glibc podman tarball is for the Debian package only; it must not
           # end up in the Alpine bundle.
           rm -f .melange-src/components/podman-gnu-*.tar.gz
+
+          # Assert the component set is complete for THIS arch before melange is
+          # invoked, and name everything that is missing rather than stopping at
+          # the first gap.
+          #
+          # The bundle definition only checks that components/ is non-empty, so a
+          # partial download used to produce a package that was quietly missing
+          # binaries, or a confusing melange error much later. A half-populated
+          # matrix is the realistic cause: see the note on `arch` in the
+          # component job's matrix above.
+          missing=()
+          for component in $(jq -r 'keys[]' <<< "${COMPONENTS}"); do
+            version="$(jq -er --arg c "${component}" '.[$c].version' <<< "${COMPONENTS}")"
+            apk=".melange-src/components/${component}-${version}-r0.apk"
+            [[ -f "${apk}" ]] || missing+=("${apk}")
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::incomplete component set for ${{ matrix.arch }}; missing ${#missing[@]}:"
+            printf '  %s\n' "${missing[@]}" >&2
+            echo "present:" >&2
+            ls -la .melange-src/components >&2
+            exit 1
+          fi
+
+          echo "component set complete for ${{ matrix.arch }}"
 
           # The bundle reads its Alpine-specific inputs from alpine/. The helpers
           # fragment is shared with the Debian package, so it lives one level up

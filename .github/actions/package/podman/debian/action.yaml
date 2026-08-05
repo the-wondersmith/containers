@@ -64,6 +64,7 @@ runs:
         COMPONENTS_DIR: ${{ inputs.components-dir }}
         COMPONENTS: ${{ inputs.components }}
         STAGING_DIR: ${{ runner.temp }}/staging
+        ARCH: ${{ inputs.arch }}
       run: |
         set -euo pipefail
 
@@ -89,15 +90,29 @@ runs:
 
         # 2. The static musl helpers. The podman .apk is skipped: it is the
         #    musl build, which belongs to the Alpine bundle only.
+        #
+        #    Completeness is asserted up front, naming every gap rather than
+        #    stopping at the first. A half-populated component matrix is the
+        #    realistic cause, and reporting one missing file at a time turns a
+        #    single matrix mistake into several rounds of CI.
+        missing=()
         for component in netavark aardvark-dns catatonit buildah; do
           version="$(jq -er --arg c "${component}" '.[$c].version' <<< "${COMPONENTS}")"
           apk="${COMPONENTS_DIR}/${component}-${version}-r0.apk"
+          [[ -f "${apk}" ]] || missing+=("${apk}")
+        done
 
-          if [[ ! -f "${apk}" ]]; then
-            echo "::error::missing component: ${apk}"
-            ls -la "${COMPONENTS_DIR}" >&2
-            exit 1
-          fi
+        if (( ${#missing[@]} > 0 )); then
+          echo "::error::incomplete component set for ${ARCH}; missing ${#missing[@]}:"
+          printf '  %s\n' "${missing[@]}" >&2
+          echo "present:" >&2
+          ls -la "${COMPONENTS_DIR}" >&2
+          exit 1
+        fi
+
+        for component in netavark aardvark-dns catatonit buildah; do
+          version="$(jq -er --arg c "${component}" '.[$c].version' <<< "${COMPONENTS}")"
+          apk="${COMPONENTS_DIR}/${component}-${version}-r0.apk"
 
           echo "unpacking $(basename "${apk}")"
           # apk control entries and the apk-specific SBOM database have no
