@@ -1,0 +1,145 @@
+#!/usr/bin/make -f
+# debian/rules — binary-assembly packaging for the self-contained podman bundle.
+#
+# Nothing is compiled here. The payload is produced externally:
+#
+#   * netavark, aardvark-dns, catatonit and buildah are built once per
+#     architecture as static musl binaries by the melange definitions under
+#     packaging/melange/, cached in GHCR, and shared verbatim with the .apk.
+#   * podman itself is built separately against glibc with the systemd build
+#     tag, so that the journald log driver stays available on systemd hosts.
+#
+# .github/actions/package/podman/debian unpacks those components into a single
+# staging tree and passes its path in via STAGING_DIR before invoking
+# dpkg-buildpackage. This file just moves that tree into debian/podman.
+#
+# Required environment variable (set by the packaging action):
+#   STAGING_DIR — absolute path to the assembled component staging root
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+# The payload is pre-built; there is nothing to configure, compile, or test.
+override_dh_auto_configure:
+
+override_dh_auto_build:
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	# Fail loudly rather than silently shipping an empty package if the
+	# packaging action ever forgets to export STAGING_DIR.
+	test -n "$(STAGING_DIR)" || { echo "STAGING_DIR is not set" >&2; exit 1; }
+	test -x "$(STAGING_DIR)/usr/bin/podman" || \
+		{ echo "no podman binary in $(STAGING_DIR)" >&2; exit 1; }
+	mkdir -p "$(CURDIR)/debian/podman"
+	cp -a "$(STAGING_DIR)/." "$(CURDIR)/debian/podman/"
+	# Pin helper_binaries_dir so podman resolves the bundled netavark,
+	# aardvark-dns, catatonit, rootlessport and quadlet under /usr/libexec/podman.
+	install -Dm644 "$(CURDIR)/debian/50-bundled-helpers.conf" \
+		"$(CURDIR)/debian/podman/usr/share/containers/containers.conf.d/50-bundled-helpers.conf"
+
+# dh_strip would split debug symbols into a -dbgsym package we neither want nor
+# publish, and stripping Go binaries buys very little. dh_dwz likewise has no
+# useful work to do on Go output and errors on some objects.
+override_dh_strip:
+
+override_dh_dwz:
+
+# This package is opinionated: the API socket and the netavark DHCP proxy ship
+# ENABLED, which is a deviation from Debian's own podman packaging.
+#
+# ENABLED
+#   podman.socket                      Docker-compatible API endpoint. A
+#                                      root-owned unix socket, not a network
+#                                      listener.
+#   netavark-dhcp-proxy.socket         DHCP proxy for macvlan/ipvlan networks
+#   netavark-dhcp-proxy.service        using --ipam-driver=dhcp. Carries `-a 30`
+#                                      so it idles out and re-activates on
+#                                      demand.
+#   netavark-nftables-reload.service   Re-run `netavark firewall-reload` after a
+#   netavark-firewalld-reload.service  reload flushes netavark's rules. nftables
+#                                      is a hard dependency, so without these
+#                                      container networking dies silently on the
+#                                      next `systemctl reload nftables`.
+#
+# LEFT DISABLED
+#   podman.service        socket-activated by podman.socket; enabling it
+#                         directly would run the API server permanently.
+#   podman-auto-update.*  would pull and restart containers on a timer.
+#   podman-restart.service, podman-clean-transient.service, podman-kube@.service
+#                         opt-in lifecycle helpers.
+#
+# NOTE on suite: this requires debhelper >= 13.13-ish. debhelper 13.11 (bookworm)
+# discovers units by scanning ONLY debian/<pkg>/lib/systemd/system, and this
+# package installs to usr/lib/systemd/system -- the DEP17-correct location on
+# merged-/usr -- so on bookworm dh_installsystemd finds nothing and silently
+# enables nothing. trixie's 13.24 scans both. That is one of several reasons this
+# package targets trixie; see debian/control.in for the others.
+#
+# The three invocations below MUST NOT overlap, and the -X exclusions are what
+# guarantees that. An earlier version of this file ran a catch-all
+# `--no-enable --no-start` pass over every unit and then a second pass naming
+# the units to enable, on the assumption that the later snippet would win. It
+# does not, and the failure is silent:
+#
+#   the --no-enable snippet is guarded by `deb-systemd-helper debian-installed`,
+#   which is false on a first install, so it falls through to `update-state`.
+#   That records the unit as not-enabled. The enable snippet that follows tests
+#   `deb-systemd-helper --quiet was-enabled`, which now returns false, so it
+#   takes its else branch and calls update-state again. Net effect: nothing is
+#   ever enabled, no symlink is created, and the build succeeds.
+#
+# Verified by building the package and inspecting the generated postinst plus
+# the symlinks under /etc/systemd/system after a real install.
+#
+# The final pass is still a catch-all over everything not named above, so a unit
+# added by a future upstream release gets correct maintainer-script bookkeeping
+# (and purge cleanup) rather than being silently ignored.
+override_dh_installsystemd:
+	# Enabled and started: the activation sockets. None of these units carry an
+	# Also= directive, so naming them pulls in nothing else.
+	dh_installsystemd --no-stop-on-upgrade \
+		podman.socket \
+		netavark-dhcp-proxy.socket \
+		netavark-dhcp-proxy.service
+	# Enabled but NOT started. These two are not the same shape, despite the
+	# symmetric names:
+	#
+	#   netavark-nftables-reload.service   Type=oneshot, runs `netavark
+	#                                      firewall-reload` once. It is
+	#                                      PartOf=/WantedBy= nftables.service, so
+	#                                      it fires when nftables does. Starting
+	#                                      it at install would re-apply rules
+	#                                      before nftables exists.
+	#   netavark-firewalld-reload.service  Type=simple, runs `netavark
+	#                                      firewalld-reload`, which is a
+	#                                      long-running zbus listener on
+	#                                      org.fedoraproject.FirewallD1's
+	#                                      "Reloaded" signal. WantedBy=
+	#                                      firewalld.service so it starts only
+	#                                      when firewalld does. Starting it here
+	#                                      would fail immediately on a host
+	#                                      without firewalld -- which is most
+	#                                      Debian hosts, since nftables is used
+	#                                      directly.
+	#
+	# Enabling without starting is upstream's intent in both cases: the wants
+	# symlink is what couples them to nftables/firewalld.
+	dh_installsystemd --no-start \
+		netavark-nftables-reload.service \
+		netavark-firewalld-reload.service
+	# Everything else: shipped, tracked, not enabled.
+	dh_installsystemd --no-enable --no-start \
+		-Xpodman.socket \
+		-Xnetavark-dhcp-proxy.socket \
+		-Xnetavark-dhcp-proxy.service \
+		-Xnetavark-nftables-reload.service \
+		-Xnetavark-firewalld-reload.service
+
+# The bundled helpers are static musl binaries with no ELF NEEDED entries, so
+# dh_shlibdeps finds nothing for them; it still runs, because the podman binary
+# itself is dynamically linked and its glibc/libsystemd dependencies must end up
+# in ${shlibs:Depends}.

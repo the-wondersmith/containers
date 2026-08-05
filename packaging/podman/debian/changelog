@@ -1,0 +1,10 @@
+podman (6.0.2-1) trixie; urgency=medium
+
+  * Repackaged self-contained build of podman 6.0.2 bundling netavark 2.0.0,
+    aardvark-dns 2.0.0, catatonit, rootlessport, quadlet, and the buildah
+    CLI.  No external netavark, aardvark-dns, or catatonit package required.
+  * Networking via netavark 2.x (nftables-only; iptables support removed).
+  * Rootless networking via passt/pasta (slirp4netns removed in podman 6.0).
+  * cgroups v2 required at runtime.
+
+ -- The Wondersmith <the@wondersmith.dev>  Fri, 31 Jul 2026 00:00:00 +0000

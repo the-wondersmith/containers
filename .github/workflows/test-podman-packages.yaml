@@ -1,0 +1,101 @@
+---
+name: Acceptance
+
+# The gate that makes unattended releases defensible.
+#
+# Nothing here is a smoke test. `dpkg -i && test -x` proves a file landed on
+# disk; it says nothing about whether podman 6 can actually drive netavark 2,
+# which is exactly the failure a lockstep-violating major bump produces. The
+# design deliberately has no human approval step, so this suite is the only
+# thing standing between an upstream tag and a published package.
+#
+# Privileges: the packages are exercised inside `docker run --privileged` from
+# an ordinary runner step rather than in a `container:` job. The runner VM is
+# already root, so this yields the cgroup, netns, and nftables access netavark
+# needs without nested virtualisation, and it is the only way to test the .apk
+# (which cannot be installed on the Ubuntu host).
+
+on:
+  workflow_call:
+    inputs:
+      components:
+        required: true
+        type: string
+        description: JSON object mapping each component to its version and commit.
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: ${{ matrix.distro }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: debian
+            arch: amd64
+            artifact: podman-debian-amd64
+            image: debian:trixie
+            runner: ubuntu-latest
+          - distro: debian
+            arch: arm64
+            artifact: podman-debian-arm64
+            image: debian:trixie
+            runner: ubuntu-24.04-arm
+          - distro: alpine
+            arch: x86_64
+            artifact: podman-alpine-x86_64
+            image: alpine:3.23
+            runner: ubuntu-latest
+          - distro: alpine
+            arch: aarch64
+            artifact: podman-alpine-aarch64
+            image: alpine:3.23
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      - name: Download the package under test
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          name: ${{ matrix.artifact }}
+          path: pkg
+
+      - name: Run the acceptance suite
+        shell: bash
+        env:
+          IMAGE: ${{ matrix.image }}
+          DISTRO: ${{ matrix.distro }}
+          COMPONENTS: ${{ inputs.components }}
+        run: |
+          set -euo pipefail
+
+          # --privileged plus a host cgroup namespace is what lets podman create
+          # networks and run containers inside the test container.
+          #
+          # The two bare -v flags create anonymous volumes so that
+          # /var/lib/containers (the graph driver root) and /var/tmp (where
+          # buildah stages a build context overlay) sit on a real filesystem.
+          # Left on the container's own overlayfs, overlay cannot be stacked on
+          # itself and both `podman run` and `podman build` fail. Anonymous
+          # volumes are removed with the container by --rm.
+          docker run --rm --privileged --cgroupns=host \
+            -v /var/lib/containers \
+            -v /var/tmp \
+            -v /home \
+            -v "${PWD}/pkg:/pkg:ro" \
+            -v "${PWD}/.github/scripts:/scripts:ro" \
+            -e "DISTRO=${DISTRO}" \
+            -e "COMPONENTS=${COMPONENTS}" \
+            "${IMAGE}" \
+            /bin/sh /scripts/acceptance.sh

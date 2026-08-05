@@ -1,0 +1,61 @@
+# IDE configuration
+.idea/
+.vscode/
+
+# Virtual environments
+**/.venv
+
+# Local configuration and caches
+**/.env
+**/.envrc
+**/.actrc
+**/.secrets
+**/reference
+
+# Local tooling
+.local/bin/
+.local/**/data
+
+dist/
+*.deb
+*.apk
+*.buildinfo
+*.changes
+
+# act: everything under .act/ is generated -- event payloads come from
+# `mise run act:fixtures`, derived from the melange definitions. act's own
+# working directories are configured globally in ~/.actrc, not here.
+.act/
+.act-logs/
+
+# Component artifacts staged by the build. The workflow writes these to a
+# workspace-relative `components/`, so `act --bind` lands them in the repo root.
+# The .apk files are already covered above; the podman-gnu tarball is not.
+components/
+
+# melange build outputs, local build logs, and the disposable local signing key
+packages/
+melange-cache/
+.melange-logs/
+.melange-src/
+.melange-build/
+# Upstream sources checked out by the build actions (src/<component>).
+src/
+.melange-workspace/
+.deb-verify/
+melange.rsa
+melange.rsa.pub
+
+# Composite actions live under .github/actions/build/. A `**/build/**` rule in a
+# user's global core.excludesFile would otherwise make them invisible to git.
+# Repository .gitignore rules outrank core.excludesFile, so this re-includes them.
+!.github/actions/build/**
+
+# Command output
+*.zip
+*.log
+
+# OS-specific rubbish
+*~
+.DS_Store
+._*

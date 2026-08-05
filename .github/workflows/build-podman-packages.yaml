@@ -1,0 +1,595 @@
+---
+name: Build Podman Packages
+
+# Versions arrive as inputs. There is no versions.yaml and no committed state:
+# the upstream watcher resolves upstream tags, diffs them against the last
+# release's manifest, and calls this workflow with the result.
+#
+# Both triggers take a single `components` JSON blob rather than one input per
+# component. workflow_dispatch caps out at ten inputs, and five components x
+# (version, commit) already reaches that ceiling before pkgrel is counted.
+#
+# Shape:
+#   {
+#     "podman":       {"version": "6.0.2",  "commit": "b28edb9..."},
+#     "netavark":     {"version": "2.0.0",  "commit": "dd456fb..."},
+#     "aardvark-dns": {"version": "2.0.0",  "commit": "d98c599..."},
+#     "buildah":      {"version": "1.45.0", "commit": "7ae7d5a..."},
+#     "catatonit":    {"version": "0.2.1",  "commit": "bb3b96b..."}
+#   }
+
+on:
+  workflow_call:
+    inputs:
+      components:
+        required: true
+        type: string
+        description: JSON object mapping each component to its version and commit.
+      pkgrel:
+        required: false
+        type: string
+        default: "1"
+        description: >-
+          Package release number. Resets to 1 when podman's own version moves
+          and increments otherwise, so a release driven only by a bundled
+          component bump still yields a distinguishable package.
+  workflow_dispatch:
+    inputs:
+      components:
+        required: true
+        type: string
+        description: JSON object mapping each component to its version and commit.
+      pkgrel:
+        required: false
+        type: string
+        default: "1"
+        description: Package release number.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: >-
+    ${{ !(startsWith(github.ref, 'refs/tags/') || github.ref_name == github.event.repository.default_branch) }}
+
+# Read-only by default. `packages: write` is granted per job, only to the two
+# that actually publish to the GHCR component cache -- the assembly jobs consume
+# components through artifacts and have no business writing to the registry.
+permissions:
+  contents: read
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Static musl components, shared verbatim between the .deb and the .apk.
+  # Each is looked up in GHCR first and only built on a miss, so a release
+  # triggered by (say) a buildah bump rebuilds buildah alone.
+  # ───────────────────────────────────────────────────────────────────────────
+  components:
+    permissions:
+      contents: read
+      packages: write
+    name: ${{ matrix.component }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [catatonit, netavark, aardvark-dns, buildah, podman]
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      - name: Provision the tool set
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Resolve this component's version and commit
+        id: spec
+        shell: bash
+        env:
+          COMPONENTS: ${{ inputs.components }}
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          set -euo pipefail
+
+          version="$(jq -er --arg c "${COMPONENT}" '.[$c].version' <<< "${COMPONENTS}")"
+          commit="$(jq -er --arg c "${COMPONENT}" '.[$c].commit' <<< "${COMPONENTS}")"
+
+          # Read the upstream repository out of the definition rather than
+          # assuming containers/<component>: catatonit lives under openSUSE, so
+          # the assumption produced a wrong provenance annotation on its cached
+          # component.
+          repository="$(
+            mise x -- yq -r \
+              '(.pipeline[] | select(.uses == "git-checkout") | .with.repository) // ""' \
+              "packaging/melange/${COMPONENT}.yaml"
+          )"
+
+          if [[ -z "${repository}" ]]; then
+            echo "::error::no git-checkout repository in packaging/melange/${COMPONENT}.yaml"
+            exit 1
+          fi
+
+          {
+            echo "version=${version}"
+            echo "commit=${commit}"
+            echo "repository=${repository}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Look for an existing build
+        id: restore
+        uses: ./.github/actions/components/restore
+        with:
+          component: ${{ matrix.component }}
+          version: ${{ steps.spec.outputs.version }}
+          target: ${{ matrix.arch }}-linux-musl
+          recipe: packaging/melange/${{ matrix.component }}.yaml
+          dest: components
+          token: ${{ github.token }}
+
+      - name: Pin the definition to the requested version and commit
+        if: steps.restore.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          SOURCE_DEFINITION: packaging/melange/${{ matrix.component }}.yaml
+          DEFINITION: .melange-build/${{ matrix.component }}.yaml
+          VERSION: ${{ steps.spec.outputs.version }}
+          COMMIT: ${{ steps.spec.outputs.commit }}
+        run: |
+          set -euo pipefail
+
+          # The committed definition carries the version and commit it was last
+          # verified against. Rewriting them is what lets a scheduled bump build a
+          # new upstream release without a commit to this repository.
+          #
+          # Pinned into a COPY rather than in place. `yq -i` rewrites the file and
+          # strips blank lines, so editing the tracked definition dirties the
+          # working tree -- invisible in CI's throwaway checkout, but obvious when
+          # act runs with --bind against the real repository.
+          #
+          # NOTE: this happens *after* components/restore has hashed the source
+          # file, deliberately. The cache key must track the build recipe, not the
+          # version being built -- the version is already in the tag.
+          mkdir -p .melange-build
+          cp "${SOURCE_DEFINITION}" "${DEFINITION}"
+
+          yq -i ".package.version = \"${VERSION}\"" "${DEFINITION}"
+          yq -i \
+            "(.pipeline[] | select(.uses == \"git-checkout\") | .with.expected-commit) = \"${COMMIT}\"" \
+            "${DEFINITION}"
+
+      # ── act only ────────────────────────────────────────────────────────────
+      # melange's docker runner creates its workspace and then asks the DAEMON to
+      # bind-mount it into the build pod. On a GitHub runner the daemon is on the
+      # same host, so melange's default /tmp/melange-workspace-* resolves fine and
+      # this step is skipped entirely.
+      #
+      # Under act the job itself runs in a container while the daemon is the
+      # host's, so a path inside the job is invisible to it:
+      #
+      #   invalid mount config for type "bind": bind source path does not exist:
+      #   /tmp/melange-workspace-...
+      #
+      # GITHUB_WORKSPACE is host-visible because `act --bind` preserves host paths
+      # verbatim. Unique per component+arch: act runs matrix legs concurrently in
+      # one workspace, and a shared directory makes them race on the git checkout
+      # inside the guest -- "Unable to create '/home/build/.git/shallow.lock'".
+      - name: Point melange at a host-visible workspace (act only)
+        if: ${{ (env.ACT || vars.act) && steps.restore.outputs.cache-hit != 'true' }}
+        shell: bash
+        env:
+          COMPONENT: ${{ matrix.component }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          workspace="${GITHUB_WORKSPACE}/.melange-workspace/${COMPONENT}-${ARCH}"
+          rm -rf "${workspace}"
+          mkdir -p "${workspace}"
+
+          echo "MELANGE_WORKSPACE=${workspace}" >> "${GITHUB_ENV}"
+          echo "::notice::act detected; melange workspace pinned to ${workspace}"
+
+      - name: Build the component
+        if: steps.restore.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          DEFINITION: .melange-build/${{ matrix.component }}.yaml
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          # Empty on a GitHub runner, where melange's default workspace is already
+          # reachable by the daemon; set only by the act-gated step above.
+          workspace_args=()
+          if [[ -n "${MELANGE_WORKSPACE:-}" ]]; then
+            workspace_args=(--workspace-dir "${MELANGE_WORKSPACE}")
+          fi
+
+          mise x -- melange build "${DEFINITION}" \
+            --arch "${ARCH}" \
+            --runner docker \
+            --out-dir ./packages \
+            --source-dir ./.melange-src \
+            --generate-provenance \
+            --namespace "${GITHUB_REPOSITORY_OWNER}" \
+            "${workspace_args[@]}"
+
+          mkdir -p components
+          cp packages/"${ARCH}"/*.apk components/
+
+      - name: Publish the component to the cache
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: ./.github/actions/components/save
+        with:
+          reference: ${{ steps.restore.outputs.reference }}
+          artifact: components/${{ matrix.component }}-${{ steps.spec.outputs.version }}-r0.apk
+          upstream-repo: ${{ steps.spec.outputs.repository }}
+          upstream-tag: v${{ steps.spec.outputs.version }}
+          upstream-commit: ${{ steps.spec.outputs.commit }}
+          token: ${{ github.token }}
+
+      - name: Upload the component for the packaging jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: component-${{ matrix.component }}-${{ matrix.arch }}
+          path: components/*.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The one dynamically linked component: podman against glibc, with the
+  # systemd build tag, for the Debian package only.
+  # ───────────────────────────────────────────────────────────────────────────
+  podman-gnu:
+    permissions:
+      contents: read
+      packages: write
+    name: podman-gnu / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: debian:trixie
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            deb-arch: amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            deb-arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Install checkout prerequisites
+        shell: bash
+        run: |
+          set -eu
+          apt-get update -q
+          # jq comes from mise; curl/git/tar are what mise-action needs to
+          # bootstrap itself, and are not tools mise is responsible for.
+          apt-get install -y --no-install-recommends ca-certificates curl git tar
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      # ── act only ────────────────────────────────────────────────────────────
+      # jdx/mise-action is a Node action. On GitHub, the runner injects its own
+      # node into `container:` jobs; act does not, so mise-action dies with
+      #
+      #   exec: "node": executable file not found in $PATH
+      #
+      # Installing the distro node is enough for act to exec the action. Skipped
+      # entirely on a real runner, which supplies its own.
+      - name: Install node for mise-action (act only)
+        if: ${{ env.ACT || vars.act }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get install -y --no-install-recommends nodejs
+          node --version
+
+      - name: Provision the tool set
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Resolve podman's version and commit
+        id: spec
+        shell: bash
+        env:
+          COMPONENTS: ${{ inputs.components }}
+        run: |
+          set -euo pipefail
+          {
+            echo "version=$(jq -er '.podman.version' <<< "${COMPONENTS}")"
+            echo "commit=$(jq -er '.podman.commit' <<< "${COMPONENTS}")"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Look for an existing build
+        id: restore
+        uses: ./.github/actions/components/restore
+        with:
+          component: podman
+          version: ${{ steps.spec.outputs.version }}
+          target: ${{ matrix.arch }}-linux-gnu
+          recipe: .github/actions/build/podman-gnu/action.yaml
+          dest: components
+          token: ${{ github.token }}
+
+      - name: Build podman against glibc
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: ./.github/actions/build/podman-gnu
+        with:
+          version: ${{ steps.spec.outputs.version }}
+          commit: ${{ steps.spec.outputs.commit }}
+          destdir: ${{ runner.temp }}/podman-gnu
+
+      - name: Pack the staging tree
+        if: steps.restore.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          DESTDIR: ${{ runner.temp }}/podman-gnu
+          VERSION: ${{ steps.spec.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p components
+          tar -czf "components/podman-gnu-${VERSION}-${ARCH}.tar.gz" -C "${DESTDIR}" .
+
+      - name: Publish the component to the cache
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: ./.github/actions/components/save
+        with:
+          reference: ${{ steps.restore.outputs.reference }}
+          artifact: components/podman-gnu-${{ steps.spec.outputs.version }}-${{ matrix.arch }}.tar.gz
+          upstream-repo: https://github.com/containers/podman
+          upstream-tag: v${{ steps.spec.outputs.version }}
+          upstream-commit: ${{ steps.spec.outputs.commit }}
+          token: ${{ github.token }}
+
+      - name: Upload the component for the packaging job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: component-podman-gnu-${{ matrix.arch }}
+          path: components/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Assembly. Neither job compiles anything.
+  # ───────────────────────────────────────────────────────────────────────────
+  package-alpine:
+    permissions:
+      contents: read
+    name: .apk / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    needs: components
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      - name: Prepare CI environment
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Collect the built components
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          pattern: component-*-${{ matrix.arch }}
+          merge-multiple: true
+          path: .melange-src/components
+
+      - name: Stage the bundle inputs
+        shell: bash
+        env:
+          COMPONENTS: ${{ inputs.components }}
+          PKGREL: ${{ inputs.pkgrel }}
+        run: |
+          set -euo pipefail
+
+          # The glibc podman tarball is for the Debian package only; it must not
+          # end up in the Alpine bundle.
+          rm -f .melange-src/components/podman-gnu-*.tar.gz
+
+          # The bundle reads its Alpine-specific inputs from alpine/. The helpers
+          # fragment is shared with the Debian package, so it lives one level up
+          # and is copied in.
+          cp -r packaging/podman/alpine .melange-src/alpine
+          cp packaging/podman/50-bundled-helpers.conf .melange-src/alpine/
+
+          definition=packaging/melange/podman-bundle.yaml
+
+          yq -i ".package.version = \"$(jq -er '.podman.version' <<< "${COMPONENTS}")\"" "${definition}"
+          yq -i ".package.epoch = ${PKGREL}" "${definition}"
+
+          # Versioned provides must track the versions actually bundled.
+          for component in netavark aardvark-dns catatonit buildah; do
+            version="$(jq -er --arg c "${component}" '.[$c].version' <<< "${COMPONENTS}")"
+            yq -i \
+              "(.package.dependencies.provides[] | select(. == \"${component}=*\")) = \"${component}=${version}\"" \
+              "${definition}"
+          done
+
+          yq '.package' "${definition}"
+
+      # ── act only ────────────────────────────────────────────────────────────
+      # Same constraint as the component builds: melange's docker runner asks the
+      # daemon to bind-mount its workspace, and under act that daemon cannot see
+      # paths inside the job's container. Skipped on a GitHub runner.
+      - name: Point melange at a host-visible workspace (act only)
+        if: ${{ env.ACT || vars.act }}
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          workspace="${GITHUB_WORKSPACE}/.melange-workspace/bundle-${ARCH}"
+          rm -rf "${workspace}"
+          mkdir -p "${workspace}"
+
+          echo "MELANGE_WORKSPACE=${workspace}" >> "${GITHUB_ENV}"
+          echo "::notice::act detected; melange workspace pinned to ${workspace}"
+
+      - name: Build the bundle
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          # Deliberately UNSIGNED. Signing is the package repository's concern:
+          # this repository builds and attests, and the-wondersmith/apt owns the
+          # keys and signs what it serves. A key here would either be ephemeral
+          # (a signature nothing can verify -- worse than none, because apk
+          # reports one) or a second durable key to manage for no gain.
+          #
+          # The SLSA attestation on the release is the control: it binds these
+          # exact bytes to this workflow's signer identity, which is what the APT
+          # control plane verifies before ingesting.
+          # Empty unless the act-gated step above set it.
+          workspace_args=()
+          if [[ -n "${MELANGE_WORKSPACE:-}" ]]; then
+            workspace_args=(--workspace-dir "${MELANGE_WORKSPACE}")
+          fi
+
+          mise x -- melange build packaging/melange/podman-bundle.yaml \
+            --arch "${ARCH}" \
+            --runner docker \
+            --source-dir ./.melange-src \
+            --out-dir ./dist \
+            --generate-provenance \
+            --namespace "${GITHUB_REPOSITORY_OWNER}" \
+            "${workspace_args[@]}"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: podman-alpine-${{ matrix.arch }}
+          path: dist/${{ matrix.arch }}/*.apk
+          if-no-files-found: error
+
+  package-debian:
+    permissions:
+      contents: read
+    name: .deb / ${{ matrix.deb-arch }}
+    runs-on: ${{ matrix.runner }}
+    needs:
+      - components
+      - podman-gnu
+    container:
+      image: debian:trixie
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            deb-arch: amd64
+            runner: ubuntu-latest
+          - arch: aarch64
+            deb-arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Install packaging toolchain
+        shell: bash
+        run: |
+          set -eu
+          apt-get update -q
+
+          # The second group is not optional. dpkg-shlibdeps resolves each
+          # soname in the payload to the package that ships it, and it can only
+          # do that if the library is installed on the build system. Without
+          # libsubid5 the build dies with:
+          #
+          #   dpkg-shlibdeps: error: cannot find library libsubid.so.5 needed by
+          #   debian/podman/usr/bin/podman
+          #
+          # Keep this list in step with the linkage allowlist in
+          # .github/actions/build/podman-gnu/action.yaml: anything that build is
+          # permitted to link against has to be resolvable here.
+          # jq comes from mise. Everything here is either a packaging tool or a
+          # runtime library dpkg-shlibdeps must resolve -- neither is mise's job.
+          apt-get install -y --no-install-recommends \
+            binutils build-essential ca-certificates curl debhelper dpkg-dev \
+            fakeroot git tar \
+            libbtrfs0 libseccomp2 libselinux1 libsubid5 libsystemd0
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      # ── act only ────────────────────────────────────────────────────────────
+      # jdx/mise-action is a Node action. On GitHub, the runner injects its own
+      # node into `container:` jobs; act does not, so mise-action dies with
+      #
+      #   exec: "node": executable file not found in $PATH
+      #
+      # Installing the distro node is enough for act to exec the action. Skipped
+      # entirely on a real runner, which supplies its own.
+      - name: Install node for mise-action (act only)
+        if: ${{ env.ACT || vars.act }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get install -y --no-install-recommends nodejs
+          node --version
+
+      - name: Provision the tool set
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Collect the built components
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          pattern: component-*-${{ matrix.arch }}
+          merge-multiple: true
+          path: components
+
+      - name: Assemble the package
+        uses: ./.github/actions/package/podman/debian
+        with:
+          components-dir: components
+          components: ${{ inputs.components }}
+          pkgrel: ${{ inputs.pkgrel }}
+          arch: ${{ matrix.deb-arch }}
+
+      - name: Upload the package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: podman-debian-${{ matrix.deb-arch }}
+          path: dist/*.deb
+          if-no-files-found: error

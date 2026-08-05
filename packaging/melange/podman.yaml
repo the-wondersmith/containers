@@ -1,0 +1,130 @@
+---
+# podman — fully static musl build.
+#
+# BUILD TAG STRATEGY
+# podman's Makefile computes BUILDTAGS by *probing for headers*
+# (hack/systemd_tag.sh, hack/libsubid_tag.sh, hack/btrfs_installed_tag.sh).
+# That means the set of -dev packages installed below IS the build
+# configuration -- we never override BUILDTAGS wholesale, because doing so
+# silently drops upstream defaults such as `grpcnotrace`. Additions go through
+# EXTRA_BUILDTAGS, which the Makefile appends (`BUILDTAGS += ${EXTRA_BUILDTAGS}`).
+#
+# Deliberately NOT installed, so the probes exclude them:
+#   gpgme-dev        -> replaced by containers_image_openpgp (pure-Go OpenPGP);
+#                       Alpine ships no static gpgme, so this is also required
+#                       for the static link to succeed.
+#   btrfs-progs-dev  -> probe emits exclude_graphdriver_btrfs. overlay works
+#                       fine on btrfs, and libbtrfs has no static form here.
+#   shadow subid     -> no libsubid tag; podman parses /etc/subuid directly.
+#                       Only affects NSS/SSSD-backed subid ranges.
+#   systemd          -> does not exist on musl at all. Consequently
+#                       `make install.systemd` is an empty target and this
+#                       build ships no unit files, which is correct for Alpine.
+#
+# osusergo/netgo force pure-Go user and DNS resolution. Standard for static Go
+# binaries, and it sidesteps musl's static-NSS caveats entirely.
+package:
+  name: podman
+  version: 6.0.2
+  epoch: 0
+  description: Tool for managing OCI containers and pods (static musl build)
+  url: https://podman.io
+  copyright:
+    - license: Apache-2.0
+
+environment:
+  contents:
+    keyring:
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616a9724.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
+    repositories:
+      # Alpine 3.23, not 3.21: podman 6 requires Go >= 1.25.9 and 3.21 ships
+      # only 1.23.9. 3.23 ships 1.25.10.
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+    packages:
+      - bash
+      - build-base
+      - busybox
+      # GNU coreutils: `make install.bin` uses `ln -sfr` to create the quadlet
+      # systemd-generator symlink, and busybox ln has no -r/--relative.
+      - coreutils
+      - git
+      - go
+      - go-md2man
+      - libseccomp-dev
+      - libseccomp-static
+      - linux-headers
+      - make
+      # `make docs` drives hack/markdown-preprocess, which is Python.
+      - python3
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/containers/podman
+      tag: v${{package.version}}
+      expected-commit: b28edb9ad70ce4317dc762ee9ce0a6d081d154e9
+
+  - name: Report the probed build tags
+    runs: |
+      echo "apparmor:  $(hack/apparmor_tag.sh)"
+      echo "btrfs:     $(hack/btrfs_installed_tag.sh)"
+      echo "sqlite:    $(hack/sqlite_tag.sh)"
+      echo "systemd:   $(hack/systemd_tag.sh)"
+      echo "libsubid:  $(hack/libsubid_tag.sh)"
+
+  - name: Build
+    runs: |
+      # PREFIX is required for the *build*, not just the install: podman bakes
+      # _installPrefix, _etcDir and quadlet._binDir into the binary via ldflags.
+      # Without it the binaries embed /usr/local while the payload lands in /usr.
+      #
+      # HELPER_BINARIES_DIR pins the bundled-helper lookup path at compile time,
+      # belt-and-braces with the shipped containers.conf.d fragment.
+      #
+      # GOFLAGS carries the static-link flag because `bin/rootlessport` is built
+      # by a Makefile rule (`bin/rootlessport:`) that passes no -ldflags at all,
+      # so EXTRA_LDFLAGS never reaches it and it links dynamically against musl.
+      # Command-line -ldflags still take precedence for the targets that set
+      # them, so this only fills the gap. -trimpath mirrors the Makefile default.
+      export GOFLAGS='-trimpath -ldflags=-extldflags=-static'
+
+      make binaries \
+        PREFIX=/usr \
+        HELPER_BINARIES_DIR=/usr/libexec/podman \
+        EXTRA_BUILDTAGS='containers_image_openpgp osusergo netgo' \
+        EXTRA_LDFLAGS='-extldflags=-static'
+
+  - name: Assert every produced binary is statically linked
+    runs: |
+      rc=0
+      for b in bin/podman bin/podman-remote bin/rootlessport bin/quadlet; do
+        [ -f "$b" ] || continue
+        if readelf -d "$b" 2> /dev/null | grep -q 'NEEDED'; then
+          echo "FAIL: $b is dynamically linked" >&2
+          readelf -d "$b" >&2
+          rc=1
+        else
+          echo "OK (static): $b"
+        fi
+      done
+      exit "$rc"
+
+  - name: Build documentation
+    # install.man installs $(MANPAGES_DEST) but does not depend on it, so the
+    # man pages have to be generated explicitly first or the install fails on
+    # every missing docs/build/man/*.1.
+    runs: |
+      make docs
+
+  - name: Install
+    runs: |
+      make \
+        DESTDIR="${{targets.destdir}}" \
+        PREFIX=/usr \
+        HELPER_BINARIES_DIR=/usr/libexec/podman \
+        install.bin install.remote install.man install.completions

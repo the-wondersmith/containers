@@ -1,0 +1,83 @@
+Source: podman
+Section: admin
+Priority: optional
+Maintainer: The Wondersmith <the@wondersmith.dev>
+# debhelper >= 13.13 is required, not just compat level 13: earlier versions
+# (bookworm ships 13.11) discover systemd units by scanning only
+# debian/<pkg>/lib/systemd/system, while this package installs to the
+# DEP17-correct usr/lib/systemd/system. On those versions dh_installsystemd
+# silently finds nothing and enables nothing.
+Build-Depends: debhelper-compat (= 13), debhelper (>= 13.13~)
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+# TARGET SUITE: trixie, not bookworm.
+#
+# bookworm cannot satisfy this package's runtime dependencies at all:
+#   crun     1.8.1   < 1.14 required
+#   conmon   2.1.6   < 2.1.7 required
+#   golang-github-containers-common  not present
+# and its debhelper is too old for the unit discovery described above. trixie
+# supplies crun 1.21, conmon 2.1.12 and golang-github-containers-common 0.62.
+#
+# Note that the dependency is golang-github-containers-common, which is what
+# Debian actually calls it. `containers-common` is the Alpine and Fedora name
+# and does not exist in Debian, not even as a virtual package.
+#
+# libsystemd0 is listed EXPLICITLY and must stay that way. podman reaches
+# journald through go-systemd's sdjournal, which dlopens libsystemd.so.0 rather
+# than linking it -- verified: the binary carries the sd_journal_* symbols and
+# the "libsystemd.so.0" string, but no ELF NEEDED entry. dh_shlibdeps cannot see
+# a dlopen, so ${shlibs:Depends} does not pick it up. Keeping the journald log
+# driver working is the entire reason the Debian podman is a separate,
+# dynamically linked build, so its dependency should not be left to chance
+# (systemd hosts happen to always have it, which is exactly how this stays
+# invisible until someone hits it).
+#
+# ca-certificates is likewise a hard dependency rather than a Recommends. Debian's
+# own podman only recommends it, but this package has no Recommends by policy, and
+# without a trust store podman cannot pull from any HTTPS registry:
+#
+#   tls: failed to verify certificate: x509: certificate signed by unknown authority
+#
+# A podman that cannot fetch an image is not usefully installed.
+
+Package: podman
+Architecture: @ARCH@
+Depends: ${shlibs:Depends}, ${misc:Depends},
+ crun (>= 1.14) | runc,
+ conmon (>= 2.1.7),
+ passt,
+ nftables,
+ golang-github-containers-common,
+ uidmap,
+ init-system-helpers (>= 1.54),
+ libsystemd0,
+ ca-certificates
+Conflicts: netavark, aardvark-dns, catatonit, buildah
+Replaces: netavark, aardvark-dns, catatonit, buildah
+Provides: netavark (= @NETAVARK_VERSION@),
+ aardvark-dns (= @AARDVARK_DNS_VERSION@),
+ catatonit (= @CATATONIT_VERSION@),
+ buildah (= @BUILDAH_VERSION@)
+Description: Self-contained Podman bundle (netavark, aardvark-dns, catatonit, buildah CLI)
+ Podman @PODMAN_VERSION@ with every required helper binary bundled under
+ /usr/libexec/podman: netavark @NETAVARK_VERSION@ (nftables-only),
+ aardvark-dns @AARDVARK_DNS_VERSION@, catatonit @CATATONIT_VERSION@ (init),
+ rootlessport, and quadlet. The standalone buildah @BUILDAH_VERSION@ CLI is
+ also included at /usr/bin/buildah.
+ .
+ No external netavark, aardvark-dns, catatonit, or buildah package is
+ required; all four are bundled and their virtual packages are provided here
+ at the exact bundled versions, so a versioned dependency on any of them is
+ satisfied by installing this package.
+ .
+ The bundled helpers are statically linked against musl and carry no runtime
+ library dependencies of their own. Only the podman binary itself is
+ dynamically linked, against glibc and libsystemd, so that the journald log
+ driver remains available on systemd hosts.
+ .
+ Rootless networking is handled by passt/pasta; slirp4netns was removed in
+ podman 6.0 and is not a dependency. nftables is required at runtime because
+ netavark 2.0 deleted all iptables support. cgroups v2 is required; cgroups v1
+ is not supported.

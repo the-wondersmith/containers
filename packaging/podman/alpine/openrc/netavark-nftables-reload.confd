@@ -1,0 +1,16 @@
+# Configuration for /etc/init.d/netavark-nftables-reload
+#
+# The watcher reads these from the environment; supervise-daemon passes this
+# file's exports through.
+
+# Seconds to wait after a table-deletion event before reapplying rules, so a
+# burst from a single `nft flush ruleset` collapses into one reload.
+#export NETAVARK_RELOAD_DEBOUNCE=2
+
+# Hard minimum between reloads. Guards against a reload that somehow emits a
+# deletion event of its own driving a loop.
+#export NETAVARK_RELOAD_COOLDOWN=5
+
+# The nftables table netavark owns. Only change these if netavark upstream does.
+#export NETAVARK_TABLE_FAMILY=inet
+#export NETAVARK_TABLE_NAME=netavark

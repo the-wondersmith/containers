@@ -1,0 +1,139 @@
+---
+name: Prune Component Cache
+
+# GHCR was chosen for the component cache precisely because it does not expire.
+# That cuts both ways: without pruning, every component version ever built
+# accumulates forever, along with an entry for every recipe change.
+#
+# Keeps the most recent N versions per component and deletes untagged manifests.
+# Deliberately conservative -- a wrongly pruned entry costs one rebuild, but the
+# retention floor is high enough that rollbacks stay cheap.
+
+on:
+  schedule:
+    # Monthly, 1st at 04:00 UTC.
+    - cron: '0 4 1 * *'
+  workflow_dispatch:
+    inputs:
+      keep:
+        required: false
+        type: string
+        default: "10"
+        description: Number of recent versions to retain per component.
+      dry-run:
+        required: false
+        type: boolean
+        default: true
+        description: Report what would be deleted without deleting it.
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    name: Prune ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [catatonit, netavark, aardvark-dns, buildah, podman]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # Nothing here pushes with git; do not leave the token on disk.
+          persist-credentials: false
+
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+        with:
+          allow-dependabot: "false"
+
+      - name: Provision the tool set
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Prune old versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMPONENT: ${{ matrix.component }}
+          # A scheduled run has no inputs, so both need defaults here too.
+          KEEP: ${{ inputs.keep || '10' }}
+          # Deliberately tested for the string 'false' rather than compared to
+          # the boolean. On a scheduled run the `inputs` context is absent, and
+          # GitHub's loose equality casts both null and false to 0 -- so
+          # `inputs.dry-run == false` evaluates TRUE with no inputs at all,
+          # which made every scheduled run delete for real while the workflow
+          # documented the opposite. Comparing the rendered string means an
+          # absent input renders empty and dry-run stays on.
+          DRY_RUN: ${{ format('{0}', inputs.dry-run) == 'false' && 'false' || 'true' }}
+        run: |
+          set -euo pipefail
+
+          package="containers/components/${COMPONENT}"
+          # The REST path wants the package name percent-encoded.
+          encoded="${package//\//%2F}"
+          owner="${GITHUB_REPOSITORY_OWNER}"
+
+          echo "::notice::pruning ${owner}/${package} (keep=${KEEP}, dry-run=${DRY_RUN})"
+
+          # /users/ works for a personal account; /orgs/ is the org equivalent.
+          # Probe rather than assume, so this keeps working if the repository
+          # moves under an organisation.
+          for scope in "users/${owner}" "orgs/${owner}"; do
+            if gh api "/${scope}/packages/container/${encoded}" > /dev/null 2>&1; then
+              base="/${scope}/packages/container/${encoded}"
+              break
+            fi
+          done
+
+          if [[ -z "${base:-}" ]]; then
+            echo "::notice::no such package yet: ${package}; nothing to prune"
+            exit 0
+          fi
+
+          versions="$(gh api --paginate "${base}/versions")"
+          total="$(jq -s 'add | length' <<< "${versions}")"
+          echo "found ${total} version(s)"
+
+          # Newest first, skip the retained head, delete the tail. Untagged
+          # manifests are always fair game: they are orphaned layers from an
+          # overwritten tag and nothing can resolve them.
+          doomed="$(
+            jq -s -r --argjson keep "${KEEP}" '
+              add
+              | sort_by(.created_at) | reverse
+              | to_entries
+              | map(select(
+                  (.value.metadata.container.tags | length) == 0
+                  or .key >= $keep
+                ))
+              | .[].value.id
+            ' <<< "${versions}"
+          )"
+
+          if [[ -z "${doomed}" ]]; then
+            echo "::notice::nothing to prune for ${COMPONENT}"
+            exit 0
+          fi
+
+          count=0
+          while IFS= read -r id; do
+            [[ -n "${id}" ]] || continue
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "would delete version ${id}"
+            else
+              gh api -X DELETE "${base}/versions/${id}"
+              echo "deleted version ${id}"
+            fi
+            count=$(( count + 1 ))
+          done <<< "${doomed}"
+
+          echo "::notice::${COMPONENT}: ${count} version(s) $(
+            [[ "${DRY_RUN}" == "true" ]] && echo 'would be pruned' || echo 'pruned'
+          )"

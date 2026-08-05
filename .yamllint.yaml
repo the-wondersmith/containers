@@ -1,0 +1,33 @@
+---
+extends: default
+
+yaml-files:
+  - "*.yml"
+  - "*.yaml"
+
+# Only lint repo-authored YAML; never descend into dependencies or build output.
+# Only repo-authored YAML. Everything below is build output, throwaway scratch,
+# or upstream source the build actions check out -- linting it reports on code we
+# neither wrote nor ship.
+ignore: |
+  dist/
+  packages/
+  .local/
+  node_modules/
+  .act/
+  .act-logs/
+  .melange-src/
+  .melange-build/
+  .melange-workspace/
+  src/
+
+rules:
+  # GitHub Actions workflows use `on:` as a mapping key, which yamllint would
+  # otherwise flag as a truthy value. Skip key checks; still check values.
+  truthy:
+    check-keys: false
+
+  # Align with editorconfig
+  line-length:
+    max: 120
+    level: warning

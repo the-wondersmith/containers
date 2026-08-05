@@ -1,0 +1,108 @@
+#!/bin/sh
+# shellcheck shell=sh
+#
+# Restore netavark's firewall rules after an external nftables flush.
+#
+# WHY THIS EXISTS
+# On systemd hosts netavark-nftables-reload.service handles this declaratively:
+# PartOf=/WantedBy=nftables.service couples a `netavark firewall-reload` oneshot
+# to the nftables service. OpenRC has no way to express "run this after another
+# service reloads", and nf_tables broadcasts over netlink rather than D-Bus, so
+# the firewalld listener trick (`netavark firewalld-reload`, which blocks on a
+# D-Bus signal) has no equivalent here. netavark itself ships no netlink watcher.
+#
+# HOW IT WORKS
+# `nft monitor tables` filters to table-level events kernel-side, which is what
+# makes this tractable: ordinary container churn adds and removes rules and
+# chains inside the netavark table and produces NO output at all. The only thing
+# that emits `delete table inet netavark` is the whole table going away, which is
+# what `nft flush ruleset` -- i.e. an nftables reload -- does. Verified
+# empirically; see docs/services.md.
+#
+# nft line-buffers this stream through a pipe, so no stdbuf/unbuffer is needed.
+#
+# The reload is guarded three ways because this runs as root and must never spin:
+#   * debounce  -- coalesce a burst of events from one flush into one reload
+#   * recheck   -- skip if something already recreated the table meanwhile
+#   * cooldown  -- hard floor between reloads, so a reload that somehow emits a
+#                  delete event of its own cannot drive a loop
+#
+# `netavark firewall-reload` is idempotent and reconstructs from netavark's own
+# state, so a spurious run on a host with no container networks is a no-op.
+set -eu
+
+NFT="${NFT:-nft}"
+NETAVARK="${NETAVARK:-/usr/libexec/podman/netavark}"
+TABLE_FAMILY="${NETAVARK_TABLE_FAMILY:-inet}"
+TABLE_NAME="${NETAVARK_TABLE_NAME:-netavark}"
+DEBOUNCE="${NETAVARK_RELOAD_DEBOUNCE:-2}"
+COOLDOWN="${NETAVARK_RELOAD_COOLDOWN:-5}"
+
+TAG="netavark-nftables-monitor"
+
+log() { echo "${TAG}: $*"; }
+err() { echo "${TAG}: $*" >&2; }
+
+if [ ! -x "${NETAVARK}" ]; then
+  err "netavark not found at ${NETAVARK}"
+  exit 1
+fi
+
+if ! command -v "${NFT}" > /dev/null 2>&1; then
+  err "nft not found (is the nftables package installed?)"
+  exit 1
+fi
+
+log "watching for '${TABLE_FAMILY} ${TABLE_NAME}' table deletion" \
+  "(debounce ${DEBOUNCE}s, cooldown ${COOLDOWN}s)"
+
+# `nft monitor` runs until killed; the loop below therefore only exits if the
+# monitor dies, which is treated as a failure so the supervisor restarts us.
+#
+# The whole pipeline's while body is a single subshell, so last_reload persists
+# across iterations.
+"${NFT}" monitor tables | {
+  last_reload=0
+
+  while IFS= read -r line; do
+    case "${line}" in
+      "delete table ${TABLE_FAMILY} ${TABLE_NAME}") ;;
+      *) continue ;;
+    esac
+
+    log "table '${TABLE_FAMILY} ${TABLE_NAME}' was deleted"
+
+    now="$(date +%s)"
+    elapsed=$((now - last_reload))
+
+    if [ "${elapsed}" -lt "${COOLDOWN}" ]; then
+      log "last reload was ${elapsed}s ago; within the ${COOLDOWN}s cooldown, skipping"
+      continue
+    fi
+
+    # Coalesce the rest of the burst before acting.
+    sleep "${DEBOUNCE}"
+
+    # If the table is back already, something else rebuilt it and there is
+    # nothing to do.
+    if "${NFT}" list table "${TABLE_FAMILY}" "${TABLE_NAME}" > /dev/null 2>&1; then
+      log "table already present again; no reload needed"
+      continue
+    fi
+
+    log "reapplying netavark firewall rules"
+
+    if "${NETAVARK}" firewall-reload; then
+      log "firewall-reload succeeded"
+    else
+      # Do not exit: a single failure (no networks configured, transient
+      # kernel state) must not take the watcher down.
+      err "firewall-reload failed; still watching"
+    fi
+
+    last_reload="$(date +%s)"
+  done
+}
+
+err "nft monitor exited; terminating so the supervisor can restart"
+exit 1

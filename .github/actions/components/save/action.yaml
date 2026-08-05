@@ -1,0 +1,90 @@
+---
+# Push a freshly built component into the GHCR component cache.
+#
+# The reference is produced by components/restore rather than recomputed here,
+# so the key a build was looked up under and the key it is stored under cannot
+# drift apart.
+name: components-save
+description: Publish a built component artifact to the GHCR component cache.
+
+inputs:
+  reference:
+    required: true
+    description: >-
+      Fully qualified OCI reference to push to, as emitted by the
+      components/restore action's `reference` output.
+  artifact:
+    required: true
+    description: Path to the component artifact (the built .apk or a DESTDIR tarball).
+  upstream-repo:
+    required: true
+    description: Upstream source repository, recorded as an annotation.
+  upstream-tag:
+    required: true
+    description: Upstream tag this component was built from.
+  upstream-commit:
+    required: true
+    description: Resolved upstream commit SHA this component was built from.
+  registry:
+    required: false
+    default: ghcr.io
+    description: OCI registry hosting the component cache.
+  token:
+    required: true
+    description: "Token with `packages: write` for the component registry."
+
+runs:
+  using: composite
+  steps:
+    # mise provides oras, pinned by mise.lock. This action used to carry a
+    # bespoke setup-oras step that downloaded a tarball and checked a
+    # hand-maintained SHA-256 per architecture; the lockfile does that better and
+    # in one place.
+    - name: Provision the tool set
+      uses: ./.github/actions/prepare-ci-env
+
+    - name: Authenticate to the component registry
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        TOKEN: ${{ inputs.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        printf '%s' "${TOKEN}" \
+          | mise x -- oras login "${REGISTRY}" --username "${ACTOR}" --password-stdin
+
+    - name: Push the component
+      shell: bash
+      env:
+        REFERENCE: ${{ inputs.reference }}
+        ARTIFACT: ${{ inputs.artifact }}
+        UPSTREAM_REPO: ${{ inputs.upstream-repo }}
+        UPSTREAM_TAG: ${{ inputs.upstream-tag }}
+        UPSTREAM_COMMIT: ${{ inputs.upstream-commit }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! -f "${ARTIFACT}" ]]; then
+          echo "::error::component artifact not found: ${ARTIFACT}"
+          exit 1
+        fi
+
+        # Push from the artifact's own directory so the layer's title
+        # annotation is a bare filename; `oras pull` then reproduces it
+        # directly in the destination rather than nesting the source path.
+        artifact_dir="$(cd "$(dirname "${ARTIFACT}")" && pwd)"
+        artifact_name="$(basename "${ARTIFACT}")"
+
+        cd "${artifact_dir}"
+
+        mise x -- oras push "${REFERENCE}" \
+          --artifact-type application/vnd.wondersmith.component.v1+apk \
+          --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+          --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
+          --annotation "dev.wondersmith.component.upstream-repo=${UPSTREAM_REPO}" \
+          --annotation "dev.wondersmith.component.upstream-tag=${UPSTREAM_TAG}" \
+          --annotation "dev.wondersmith.component.upstream-commit=${UPSTREAM_COMMIT}" \
+          "${artifact_name}:application/vnd.wondersmith.component.layer.v1+gzip"
+
+        echo "::notice::pushed ${REFERENCE}"

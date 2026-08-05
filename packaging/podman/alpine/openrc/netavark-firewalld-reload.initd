@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034  # OpenRC consumes these as globals, not locally.
+#
+# OpenRC equivalent of netavark-firewalld-reload.service.
+#
+# `netavark firewalld-reload` is not a oneshot: it opens a system D-Bus
+# connection and blocks on firewalld's org.fedoraproject.FirewallD1 "Reloaded"
+# signal, re-applying netavark's rules each time it fires. That is a plain
+# long-running daemon, so it supervises the same way here as under systemd.
+#
+# This works on Alpine precisely because the transport is D-Bus rather than
+# systemd. The nftables counterpart has no equivalent: nf_tables is a kernel
+# subsystem and broadcasts over netlink, not D-Bus, and netavark ships no
+# netlink watcher -- only the oneshot `firewall-reload`. systemd bridges that gap
+# with PartOf=/WantedBy=nftables.service, which OpenRC cannot express, so this
+# package ships its own netlink watcher instead -- see
+# netavark-nftables-reload.initd and docs/services.md.
+#
+# Only useful when firewalld is actually installed, which is uncommon on Alpine.
+# The package's post-install therefore adds this to the default runlevel only if
+# firewalld is present, mirroring the systemd unit's WantedBy=firewalld.service.
+
+supervisor=supervise-daemon
+
+name="Netavark firewalld reload listener"
+description="Reapplies netavark firewall rules when firewalld signals a reload"
+
+command=/usr/libexec/podman/netavark
+command_args="firewalld-reload ${netavark_firewalld_reload_opts:-}"
+
+depend() {
+  need dbus
+  use firewalld
+  after firewalld
+}

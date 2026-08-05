@@ -1,0 +1,162 @@
+---
+# Look up a prebuilt component in GHCR and pull it when present.
+#
+# WHY GHCR AND NOT actions/cache OR ARTIFACTS
+#   actions/cache evicts entries not read for 7 days, so a component whose
+#   upstream has been quiet for a fortnight would be rebuilt every time.
+#   Artifacts survive 90 days but are keyed by (run_id, name), so answering
+#   "does a netavark 2.0.0/aarch64-linux-musl build exist?" would require an
+#   index of past runs -- i.e. exactly the persistent state this repository
+#   deliberately does not keep. A registry tag answers it in one stateless call.
+#
+# CACHE KEY
+#   <version>-<target>-r<recipe-hash>, where recipe-hash is derived from the
+#   build definition itself (the melange YAML, or the composite action for the
+#   glibc podman build). Version alone is not sufficient: changing a build flag
+#   or the Alpine base would otherwise keep serving pre-change binaries forever.
+name: components-restore
+description: Resolve a component's GHCR reference and pull it if already built.
+
+inputs:
+  component:
+    required: true
+    description: Component name, e.g. netavark.
+  version:
+    required: true
+    description: Upstream version without a leading `v`, e.g. 2.0.0.
+  target:
+    required: true
+    description: Target triple fragment, e.g. aarch64-linux-musl.
+  recipe:
+    required: true
+    description: >-
+      Path to the build definition that produces this component. Its SHA-256
+      keys the cache, so any recipe change invalidates automatically.
+  dest:
+    required: true
+    description: Directory to pull the component artifact into on a cache hit.
+  registry:
+    required: false
+    default: ghcr.io
+    description: OCI registry hosting the component cache.
+  namespace:
+    required: false
+    default: ""
+    description: >-
+      Registry namespace for components. Defaults to
+      <owner>/containers/components, lowercased.
+  token:
+    required: true
+    description: "Token with `packages: read` for the component registry."
+
+outputs:
+  cache-hit:
+    description: '"true" when the component already existed and was pulled.'
+    value: ${{ steps.probe.outputs.cache-hit }}
+  reference:
+    description: Fully qualified OCI reference for this component build.
+    value: ${{ steps.key.outputs.reference }}
+  recipe-hash:
+    description: Short hash of the build definition that keys the cache.
+    value: ${{ steps.key.outputs.recipe-hash }}
+
+runs:
+  using: composite
+  steps:
+    # mise provides oras, pinned by mise.lock. This action used to carry a
+    # bespoke setup-oras step that downloaded a tarball and checked a
+    # hand-maintained SHA-256 per architecture; the lockfile does that better and
+    # in one place.
+    - name: Provision the tool set
+      uses: ./.github/actions/prepare-ci-env
+
+    - name: Compute the component cache key
+      id: key
+      shell: bash
+      env:
+        COMPONENT: ${{ inputs.component }}
+        VERSION: ${{ inputs.version }}
+        TARGET: ${{ inputs.target }}
+        RECIPE: ${{ inputs.recipe }}
+        REGISTRY: ${{ inputs.registry }}
+        NAMESPACE: ${{ inputs.namespace }}
+        OWNER: ${{ github.repository_owner }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! -f "${RECIPE}" ]]; then
+          echo "::error::recipe not found: ${RECIPE}"
+          exit 1
+        fi
+
+        # Hash the recipe with the VERSION and COMMIT stripped out.
+        #
+        # Those two fields are not part of the recipe: they say which upstream
+        # release to build, and the tag already carries the version
+        # (<version>-<target>-r<hash>). Hashing the file verbatim conflated the
+        # two, so bumping a committed version shifted the hash for every version
+        # of that component and orphaned previously cached builds -- including
+        # ones the tag already distinguished.
+        #
+        # Piping through yq also normalises formatting, so a comment-only or
+        # whitespace-only edit no longer invalidates the cache. yq is pinned in
+        # mise.lock, which is what keeps that normalisation stable over time.
+        #
+        # The expression is a no-op on recipes that are composite actions rather
+        # than melange definitions (build/podman-gnu has neither key).
+        recipe_hash="$(
+          mise x -- yq \
+            'del(.package.version) | del(.pipeline[]?.with.expected-commit)' \
+            "${RECIPE}" \
+            | sha256sum | cut -c1-7
+        )"
+
+        namespace="${NAMESPACE}"
+        if [[ -z "${namespace}" ]]; then
+          namespace="${OWNER}/containers/components"
+        fi
+        # OCI repository names must be lowercase; GitHub owners need not be.
+        namespace="$(printf '%s' "${namespace}" | tr '[:upper:]' '[:lower:]')"
+
+        tag="${VERSION}-${TARGET}-r${recipe_hash}"
+        reference="${REGISTRY}/${namespace}/${COMPONENT}:${tag}"
+
+        {
+          echo "recipe-hash=${recipe_hash}"
+          echo "tag=${tag}"
+          echo "reference=${reference}"
+        } >> "${GITHUB_OUTPUT}"
+
+        echo "::notice::${COMPONENT} -> ${reference}"
+
+    - name: Authenticate to the component registry
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        TOKEN: ${{ inputs.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        printf '%s' "${TOKEN}" \
+          | mise x -- oras login "${REGISTRY}" --username "${ACTOR}" --password-stdin
+
+    - name: Probe for an existing build
+      id: probe
+      shell: bash
+      env:
+        REFERENCE: ${{ steps.key.outputs.reference }}
+        DEST: ${{ inputs.dest }}
+      run: |
+        set -euo pipefail
+
+        if ! mise x -- oras manifest fetch "${REFERENCE}" > /dev/null 2>&1; then
+          echo "cache-hit=false" >> "${GITHUB_OUTPUT}"
+          echo "::notice::cache miss: ${REFERENCE}"
+          exit 0
+        fi
+
+        mkdir -p "${DEST}"
+        mise x -- oras pull "${REFERENCE}" --output "${DEST}"
+
+        echo "cache-hit=true" >> "${GITHUB_OUTPUT}"
+        echo "::notice::cache hit: ${REFERENCE}"

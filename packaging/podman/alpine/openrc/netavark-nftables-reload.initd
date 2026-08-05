@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034  # OpenRC consumes these as globals, not locally.
+#
+# OpenRC stand-in for netavark-nftables-reload.service.
+#
+# The systemd unit is a Type=oneshot coupled to nftables.service with
+# PartOf=/WantedBy=. OpenRC cannot express "run after another service reloads",
+# so this is instead a supervised watcher that reacts to the kernel's own
+# netlink notification. See the header of the monitor script for the details and
+# for why neither the D-Bus nor the systemd approach applies here.
+#
+# nftables is a hard dependency of this package, so unlike
+# netavark-firewalld-reload this is enabled unconditionally.
+
+supervisor=supervise-daemon
+
+name="Netavark nftables reload watcher"
+description="Reapplies netavark firewall rules after an external nftables flush"
+
+command=/usr/libexec/podman/netavark-nftables-monitor
+command_args=""
+
+depend() {
+  need net
+  use nftables
+  after nftables firewall
+}

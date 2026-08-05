@@ -1,0 +1,92 @@
+---
+# buildah — the standalone CLI. podman already links buildah as a Go library;
+# this ships the separate /usr/bin/buildah command as part of the bundle.
+#
+# Same header-probe strategy as podman.yaml: buildah computes its tag set from
+# ./btrfs_installed_tag.sh, ./hack/libsubid_tag.sh, ./hack/systemd_tag.sh and
+# ./hack/sqlite_tag.sh, so the installed -dev packages are the configuration.
+# Note the extension variable is EXTRA_BUILD_TAGS here, with an underscore --
+# podman spells the same concept EXTRA_BUILDTAGS.
+#
+# buildah sets `PREFIX := /usr/local` with a simple assignment, so it cannot be
+# overridden from the environment; it must be passed on the make command line,
+# which takes precedence over everything in the makefile.
+package:
+  name: buildah
+  version: 1.45.0
+  epoch: 0
+  description: Tool for building OCI container images (static musl build)
+  url: https://buildah.io
+  copyright:
+    - license: Apache-2.0
+
+environment:
+  contents:
+    keyring:
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616a9724.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+    packages:
+      - bash
+      - build-base
+      - busybox
+      - git
+      - go
+      - go-md2man
+      - libseccomp-dev
+      - libseccomp-static
+      - linux-headers
+      - make
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/containers/buildah
+      tag: v${{package.version}}
+      expected-commit: 7ae7d5a4021b24d02a5c281badca8c4d8ebbf442
+
+  - name: Report the probed build tags
+    runs: |
+      echo "apparmor:  $(hack/apparmor_tag.sh)"
+      echo "btrfs:     $(./btrfs_installed_tag.sh)"
+      echo "libsubid:  $(./hack/libsubid_tag.sh)"
+      echo "sqlite:    $(./hack/sqlite_tag.sh)"
+      echo "systemd:   $(./hack/systemd_tag.sh)"
+
+  - name: Build
+    runs: |
+      export GOFLAGS='-trimpath -ldflags=-extldflags=-static'
+
+      make bin/buildah \
+        PREFIX=/usr \
+        EXTRA_BUILD_TAGS='containers_image_openpgp osusergo netgo' \
+        EXTRA_LDFLAGS='-extldflags=-static'
+
+      # docs/Makefile's install target copies buildah*.1 but does not depend on
+      # the rule that generates them, so they must be built explicitly first.
+      # GOMD2MAN defaults to a copy built out of tests/tools; point it at the
+      # go-md2man already installed in the build environment instead.
+      make -C docs GOMD2MAN=go-md2man
+
+  - name: Assert the binary is statically linked
+    runs: |
+      if readelf -d bin/buildah 2> /dev/null | grep -q 'NEEDED'; then
+        echo "FAIL: bin/buildah is dynamically linked" >&2
+        readelf -d bin/buildah >&2
+        exit 1
+      fi
+      echo "OK (static): bin/buildah"
+
+  - name: Install
+    runs: |
+      make \
+        DESTDIR="${{targets.destdir}}" \
+        PREFIX=/usr \
+        EXTRA_BUILD_TAGS='containers_image_openpgp osusergo netgo' \
+        EXTRA_LDFLAGS='-extldflags=-static' \
+        install install.completions

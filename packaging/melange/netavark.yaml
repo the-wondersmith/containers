@@ -1,0 +1,108 @@
+---
+# netavark — podman's network stack. Rust, nftables-only since 2.x (all
+# iptables and CNI code was removed upstream).
+#
+# protoc is a hard build requirement: netavark's build.rs drives tonic/prost
+# code generation for the DHCP proxy gRPC interface.
+#
+# install.systemd IS run, and the units matter more than they look:
+#
+#   netavark-nftables-reload.service  Type=oneshot, PartOf=/WantedBy=
+#       nftables.service. Runs `netavark firewall-reload` once. nftables is a
+#       hard dependency of this package, and reloading it flushes netavark's
+#       rules -- without this unit container networking breaks silently until
+#       something re-adds them.
+#   netavark-firewalld-reload.service Type=simple, WantedBy= firewalld.service.
+#       Despite the symmetric name, a different shape: it runs `netavark
+#       firewalld-reload`, a long-running zbus listener on firewalld's
+#       org.fedoraproject.FirewallD1 "Reloaded" signal.
+#   netavark-dhcp-proxy.{socket,service}
+#       The DHCP proxy, for macvlan/ipvlan networks that take addresses from a
+#       real LAN DHCP server (--ipam-driver=dhcp). Shipped ENABLED: debian/rules
+#       enables and starts both, and the bundle's post-install scriptlet adds
+#       the OpenRC equivalent to the default runlevel.
+#
+# Alpine has no systemd, so podman-bundle.yaml strips usr/lib/systemd from the
+# payload rather than this component omitting it -- the component is shared
+# byte-for-byte with the Debian package, and Debian needs the units.
+package:
+  name: netavark
+  version: 2.0.0
+  epoch: 0
+  description: Container network stack for podman (static musl build)
+  url: https://github.com/containers/netavark
+  copyright:
+    - license: Apache-2.0
+
+environment:
+  contents:
+    keyring:
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616a9724.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+    packages:
+      - build-base
+      - busybox
+      - cargo
+      - git
+      - go-md2man
+      - make
+      - protobuf-dev
+      - protoc
+      - rust
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/containers/netavark
+      tag: v${{package.version}}
+      expected-commit: dd456fba828316d602f9ea8a6f1ac9b9a8441b4c
+
+  - name: Build
+    runs: |
+      # Alpine patches rustc to link musl dynamically by default; +crt-static
+      # restores upstream musl-target behaviour. That matters because this same
+      # binary is bundled into the .deb, where musl is not present.
+      #
+      # RUSTFLAGS must be scoped with an explicit --target. Applied globally it
+      # also hits proc-macro crates, which have to be dynamic host artifacts,
+      # and the build dies with "cannot produce proc-macro for <crate> as the
+      # target <triple> does not support these crate types". Naming the host
+      # triple as the target keeps host and target units distinct.
+      #
+      # Building via cargo rather than `make build` because --target adds a
+      # triple component to the output path that the Makefile's copy does not
+      # expect; the binary is placed at bin/netavark itself, which is what
+      # install.netavark consumes.
+      host_triple="$(rustc -vV | sed -n 's/^host: //p')"
+      echo "host triple: ${host_triple}"
+
+      export CARGO_TARGET_DIR=targets
+      export RUSTFLAGS='-C target-feature=+crt-static'
+
+      cargo build --release --target "${host_triple}"
+
+      install -Dm755 "targets/${host_triple}/release/netavark" bin/netavark
+
+      make docs
+
+  - name: Assert the binary is statically linked
+    runs: |
+      if readelf -d bin/netavark 2> /dev/null | grep -q 'NEEDED'; then
+        echo "FAIL: bin/netavark is dynamically linked" >&2
+        readelf -d bin/netavark >&2
+        exit 1
+      fi
+      echo "OK (static): bin/netavark"
+
+  - name: Install
+    runs: |
+      make \
+        DESTDIR="${{targets.destdir}}" \
+        PREFIX=/usr \
+        install.netavark install.docs install.systemd

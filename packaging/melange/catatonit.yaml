@@ -1,0 +1,68 @@
+---
+# catatonit — the container init process podman execs as PID 1 inside
+# containers (`--init`). Built here rather than harvested from the distro so
+# that the Debian and Alpine packages bundle the *same*, *pinned* binary.
+#
+# Upstream builds this fully static via autotools; the linkage assertion in
+# the pipeline below fails the build if that ever stops being true.
+package:
+  name: catatonit
+  version: 0.2.1
+  epoch: 0
+  description: Container init process, bundled under /usr/libexec/podman
+  url: https://github.com/openSUSE/catatonit
+  copyright:
+    - license: GPL-2.0-or-later
+
+environment:
+  contents:
+    # Alpine, not Wolfi. melange defaults to the Wolfi ecosystem (which is
+    # glibc-based); every component here targets Alpine 3.23 / musl so a single
+    # static build can serve both the .apk and the .deb.
+    #
+    # 3.23 specifically, matching every other component. This file lagged on
+    # 3.21 for a while after the others moved, and nothing caught it because
+    # catatonit is autotools-only -- it never needed the newer Go that forced
+    # the move. Keep it on the same branch as the rest regardless: a different
+    # musl for one bundled component is an inconsistency in its own right.
+    keyring:
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616a9724.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+    packages:
+      - autoconf
+      - automake
+      - build-base
+      - busybox
+      - git
+      - libtool
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/openSUSE/catatonit
+      tag: v${{package.version}}
+      expected-commit: bb3b96b99668e544618c5aec427c1f4b6b9ee9bb
+
+  - name: Build
+    runs: |
+      ./autogen.sh
+      ./configure
+      make
+
+  - name: Assert the binary is statically linked
+    runs: |
+      if readelf -d catatonit 2> /dev/null | grep -q 'NEEDED'; then
+        echo "catatonit is dynamically linked; expected a static binary" >&2
+        readelf -d catatonit >&2
+        exit 1
+      fi
+
+  - name: Install
+    runs: |
+      install -Dm755 catatonit "${{targets.destdir}}/usr/libexec/podman/catatonit"

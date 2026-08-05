@@ -1,0 +1,37 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
+
+[**/rules]
+indent_style = tab
+
+# Formats we do not control.
+#
+# Debian policy mandates a single leading space for continuation lines in
+# debian/control and for the maintainer trailer in debian/changelog, and the
+# Apache-2.0 text is reproduced verbatim. All three legitimately violate the
+# even-indent rule, so the indent properties are unset rather than the files
+# being excluded outright -- charset, line endings and final newline still apply.
+[LICENSE]
+indent_size = unset
+indent_style = unset
+
+[**/debian/control*]
+indent_size = unset
+indent_style = unset
+
+[**/debian/changelog]
+indent_size = unset
+indent_style = unset

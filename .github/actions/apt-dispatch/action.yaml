@@ -1,0 +1,43 @@
+---
+# Notify the APT control plane that a release is ready to ingest.
+#
+# Three callers need this: release.yaml (for CI-created releases, which do not
+# fire `release: published` because GitHub suppresses events from the default
+# token), promote-prerelease.yaml (same reason), and publish-apt-packages.yaml
+# (for releases a human creates in the UI). Ingest is idempotent on (repo, tag),
+# so an overlapping dispatch is harmless.
+name: apt-dispatch
+description: Dispatch a publish-deb event to the APT repository control plane.
+
+inputs:
+  tag:
+    required: true
+    description: Release tag the control plane should ingest.
+  token:
+    required: true
+    description: Dispatch-only token for the APT control plane repository.
+  target-repo:
+    required: false
+    default: the-wondersmith/apt
+    description: Repository owning APT publication.
+
+runs:
+  using: composite
+  steps:
+    - name: Dispatch publish-deb
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        TARGET_REPO: ${{ inputs.target-repo }}
+        SOURCE_REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        jq -n \
+          --arg tag "${RELEASE_TAG}" \
+          --arg repo "${SOURCE_REPO}" \
+          '{event_type: "publish-deb", client_payload: {tag: $tag, repo: $repo}}' \
+          | gh api -X POST "/repos/${TARGET_REPO}/dispatches" --input -
+
+        echo "::notice::dispatched publish-deb for ${RELEASE_TAG} to ${TARGET_REPO}"

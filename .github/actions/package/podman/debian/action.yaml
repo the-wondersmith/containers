@@ -1,0 +1,271 @@
+---
+# Assemble the Debian package from prebuilt components. Nothing is compiled.
+#
+# The staging tree is an overlay of:
+#   * podman-gnu-<version>-<arch>.tar.gz -- podman built against glibc with the
+#     systemd tag, so the journald log driver and the unit files survive;
+#   * the static musl component .apk files for netavark, aardvark-dns,
+#     catatonit and buildah, shared byte-for-byte with the Alpine package.
+#
+# The musl podman .apk is present in the same directory (the Alpine bundle
+# needs it) and is explicitly skipped here.
+#
+# Preconditions, installed by the calling job:
+#   * debhelper (>= 13.13), dpkg-dev, build-essential, fakeroot, jq, tar
+#   * the RUNTIME libraries the glibc podman links against -- libsubid5,
+#     libseccomp2, libselinux1, libbtrfs0, libsystemd0. dpkg-shlibdeps maps each
+#     soname in the payload to the package that ships it, and can only do so if
+#     the library is actually installed here. Missing libsubid5 alone is a hard
+#     build failure, not a degraded ${shlibs:Depends}.
+name: package-podman-debian
+description: >-
+  Assemble a self-contained podman .deb from prebuilt components. Produces an
+  unsigned, binary-only package; repository signing belongs to the APT control
+  plane.
+
+inputs:
+  components-dir:
+    required: true
+    description: Directory holding the component .apk files and the podman-gnu tarball.
+  components:
+    required: true
+    description: >-
+      JSON object mapping each component to its version and commit, as passed
+      to the build workflow. Drives the templated versions in debian/control.
+  pkgrel:
+    required: true
+    description: Debian package revision.
+  arch:
+    required: true
+    description: Target Debian architecture (amd64 or arm64).
+  suite:
+    required: false
+    default: trixie
+    description: Suite recorded in the changelog entry.
+  outdir:
+    required: false
+    default: dist
+    description: >-
+      Directory to write the .deb into. A relative path resolves against
+      GITHUB_WORKSPACE.
+
+outputs:
+  deb-path:
+    description: Absolute path to the produced .deb.
+    value: ${{ steps.collect.outputs.deb-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Assemble the component staging tree
+      id: stage
+      shell: bash
+      env:
+        COMPONENTS_DIR: ${{ inputs.components-dir }}
+        COMPONENTS: ${{ inputs.components }}
+        STAGING_DIR: ${{ runner.temp }}/staging
+      run: |
+        set -euo pipefail
+
+        rm -rf "${STAGING_DIR}"
+        mkdir -p "${STAGING_DIR}"
+
+        podman_version="$(jq -er '.podman.version' <<< "${COMPONENTS}")"
+
+        # 1. The glibc podman. Its absence is fatal: falling through to the
+        #    musl build would silently ship a package with no systemd units.
+        gnu_tarball="$(
+          find "${COMPONENTS_DIR}" -maxdepth 1 -name 'podman-gnu-*.tar.gz' | head -n1
+        )"
+
+        if [[ -z "${gnu_tarball}" ]]; then
+          echo "::error::no podman-gnu tarball found in ${COMPONENTS_DIR}"
+          ls -la "${COMPONENTS_DIR}" >&2
+          exit 1
+        fi
+
+        echo "unpacking $(basename "${gnu_tarball}")"
+        tar -xzf "${gnu_tarball}" -C "${STAGING_DIR}"
+
+        # 2. The static musl helpers. The podman .apk is skipped: it is the
+        #    musl build, which belongs to the Alpine bundle only.
+        for component in netavark aardvark-dns catatonit buildah; do
+          version="$(jq -er --arg c "${component}" '.[$c].version' <<< "${COMPONENTS}")"
+          apk="${COMPONENTS_DIR}/${component}-${version}-r0.apk"
+
+          if [[ ! -f "${apk}" ]]; then
+            echo "::error::missing component: ${apk}"
+            ls -la "${COMPONENTS_DIR}" >&2
+            exit 1
+          fi
+
+          echo "unpacking $(basename "${apk}")"
+          # apk control entries and the apk-specific SBOM database have no
+          # meaning in a .deb; the payload paths do.
+          tar -xzf "${apk}" -C "${STAGING_DIR}" \
+            --exclude='.PKGINFO' \
+            --exclude='.melange.yaml' \
+            --exclude='.SIGN.*' \
+            --exclude='var/lib/db/sbom'
+        done
+
+        # Fail before dpkg-buildpackage rather than after, with a clearer error.
+        rc=0
+        for f in \
+          usr/bin/podman \
+          usr/bin/buildah \
+          usr/libexec/podman/netavark \
+          usr/libexec/podman/aardvark-dns \
+          usr/libexec/podman/catatonit \
+          usr/libexec/podman/rootlessport \
+          usr/libexec/podman/quadlet \
+          usr/lib/systemd/system/podman.socket; do
+          if [[ ! -e "${STAGING_DIR}/${f}" ]]; then
+            echo "::error::staging tree is missing ${f}"
+            rc=1
+          fi
+        done
+        [[ "${rc}" -eq 0 ]]
+
+        echo "podman-version=${podman_version}" >> "${GITHUB_OUTPUT}"
+
+    - name: Render debian/ from the templates
+      id: assemble
+      shell: bash
+      env:
+        COMPONENTS: ${{ inputs.components }}
+        VERSION: ${{ steps.stage.outputs.podman-version }}
+        PKGREL: ${{ inputs.pkgrel }}
+        SUITE: ${{ inputs.suite }}
+        ARCH: ${{ inputs.arch }}
+        BUILD_ROOT: ${{ runner.temp }}/podman-pkg
+      run: |
+        set -euo pipefail
+
+        build_dir="${BUILD_ROOT}/podman-${VERSION}"
+
+        # dpkg-buildpackage writes its output to the PARENT of the source
+        # directory, so the source tree gets its own named subdirectory and the
+        # parent doubles as the output drop.
+        rm -rf "${BUILD_ROOT}"
+        mkdir -p "${build_dir}"
+
+        cp -r "${GITHUB_WORKSPACE}/packaging/podman/debian" "${build_dir}/debian"
+        cp "${GITHUB_WORKSPACE}/packaging/podman/50-bundled-helpers.conf" \
+          "${build_dir}/debian/50-bundled-helpers.conf"
+
+        # git does not reliably preserve the executable bit for everyone who
+        # touches this tree, and dpkg-buildpackage hard-fails on a
+        # non-executable debian/rules.
+        chmod +x "${build_dir}/debian/rules"
+
+        # control is generated, never committed: the bundled versions are
+        # inputs now. sed rather than envsubst, because envsubst would eat the
+        # ${shlibs:Depends} and ${misc:Depends} substvars.
+        control_in="${build_dir}/debian/control.in"
+        control="${build_dir}/debian/control"
+
+        sed \
+          -e "s|@ARCH@|${ARCH}|g" \
+          -e "s|@PODMAN_VERSION@|${VERSION}|g" \
+          -e "s|@NETAVARK_VERSION@|$(jq -er '."netavark".version' <<< "${COMPONENTS}")|g" \
+          -e "s|@AARDVARK_DNS_VERSION@|$(jq -er '."aardvark-dns".version' <<< "${COMPONENTS}")|g" \
+          -e "s|@CATATONIT_VERSION@|$(jq -er '."catatonit".version' <<< "${COMPONENTS}")|g" \
+          -e "s|@BUILDAH_VERSION@|$(jq -er '."buildah".version' <<< "${COMPONENTS}")|g" \
+          "${control_in}" > "${control}"
+
+        rm -f "${control_in}"
+
+        if grep -q '@[A-Z_]*@' "${control}"; then
+          echo "::error::unsubstituted placeholders remain in debian/control"
+          grep -n '@[A-Z_]*@' "${control}" >&2
+          exit 1
+        fi
+
+        # Both the version line AND the maintainer trailer are rewritten.
+        # Rewriting only line 1 -- as this did previously -- shipped the trailer
+        # date committed to the repository on every release, so a package built
+        # months later still claimed the date the file was authored. dpkg does
+        # not care, but it is wrong metadata in a published artifact and lintian
+        # flags it.
+        #
+        # The date is derived from SOURCE_DATE_EPOCH when the caller sets one, so
+        # a reproducible rebuild reproduces the changelog too; otherwise it is
+        # the build time. RFC 2822 in the C locale, which is what Debian policy
+        # requires and what `date -R` emits.
+        changelog="${build_dir}/debian/changelog"
+
+        trailer_date="$(
+          if [[ -n "${SOURCE_DATE_EPOCH:-}" ]]; then
+            LC_ALL=C date -R -u -d "@${SOURCE_DATE_EPOCH}"
+          else
+            LC_ALL=C date -R
+          fi
+        )"
+
+        sed -i \
+          -e "1s/.*/podman (${VERSION}-${PKGREL}) ${SUITE}; urgency=medium/" \
+          -e "s/^ -- \(.*\)  .*$/ -- \1  ${trailer_date}/" \
+          "${changelog}"
+
+        # dpkg-parsechangelog is the authority on whether the result is valid;
+        # a malformed trailer is otherwise only discovered by dpkg-buildpackage
+        # failing several steps later with a less obvious message.
+        parsed_version="$(dpkg-parsechangelog -l "${changelog}" -S Version)"
+        parsed_date="$(dpkg-parsechangelog -l "${changelog}" -S Date)"
+
+        if [[ "${parsed_version}" != "${VERSION}-${PKGREL}" ]]; then
+          echo "::error::changelog version is ${parsed_version}, expected ${VERSION}-${PKGREL}"
+          exit 1
+        fi
+
+        echo "changelog: ${parsed_version} / ${parsed_date}"
+
+        echo "build-dir=${build_dir}" >> "${GITHUB_OUTPUT}"
+
+    - name: Build the .deb
+      shell: bash
+      working-directory: ${{ steps.assemble.outputs.build-dir }}
+      env:
+        ARCH: ${{ inputs.arch }}
+        STAGING_DIR: ${{ runner.temp }}/staging
+      run: |
+        set -euo pipefail
+
+        # -b        binary-only; no source .dsc.
+        # -us -uc   unsigned; the APT control plane signs the repository.
+        # STAGING_DIR reaches debian/rules through the environment.
+        dpkg-buildpackage -b -us -uc --host-arch="${ARCH}"
+
+    - name: Collect the built .deb
+      id: collect
+      shell: bash
+      env:
+        BUILD_DIR: ${{ steps.assemble.outputs.build-dir }}
+        VERSION: ${{ steps.stage.outputs.podman-version }}
+        PKGREL: ${{ inputs.pkgrel }}
+        ARCH: ${{ inputs.arch }}
+        OUTDIR: ${{ inputs.outdir }}
+      run: |
+        set -euo pipefail
+
+        case "${OUTDIR}" in
+          /*) outdir="${OUTDIR}" ;;
+          *)  outdir="${GITHUB_WORKSPACE}/${OUTDIR}" ;;
+        esac
+
+        mkdir -p "${outdir}"
+
+        deb_name="podman_${VERSION}-${PKGREL}_${ARCH}.deb"
+        deb_src="$(dirname "${BUILD_DIR}")/${deb_name}"
+
+        if [[ ! -f "${deb_src}" ]]; then
+          echo "::error::expected package not found: ${deb_src}"
+          ls -la "$(dirname "${BUILD_DIR}")" >&2
+          exit 1
+        fi
+
+        mv "${deb_src}" "${outdir}/${deb_name}"
+
+        echo "deb-path=${outdir}/${deb_name}" >> "${GITHUB_OUTPUT}"
+        echo "::notice::built ${deb_name}"

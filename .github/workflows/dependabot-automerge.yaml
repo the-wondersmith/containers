@@ -1,0 +1,164 @@
+---
+# yamllint disable rule:line-length
+name: Dependabot auto-merge
+
+# Fires when the CI workflow finishes. We only act on runs that belong to a
+# Dependabot pull request, and only merge when every gate below holds:
+#   1. the triggering CI run concluded successfully
+#   2. the PR author is dependabot[bot]
+#   3. the diff touches ONLY workflow/action definitions + the dependabot config
+#   4. every changed line is a pinned-SHA `uses:` bump (nothing else)
+# Any deviation fails closed: the PR is left for a human.
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    # Only Dependabot branches, and only when CI passed.
+    #
+    # The actor is read off the triggering run rather than from `github.actor`.
+    # On a workflow_run event `github.actor` refers to the actor associated with
+    # the *dispatching* run, which is not reliably dependabot[bot], so the old
+    # gate could silently never match. The PR-author check further down is the
+    # real authority; this is the cheap pre-filter.
+    if: >-
+      github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.actor.login == 'dependabot[bot]'
+    steps:
+      - name: Resolve the pull request for this CI run
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          pr_number="$(gh pr list --repo "${GITHUB_REPOSITORY}" \
+            --head "${HEAD_BRANCH}" --state open \
+            --json number,author,headRefOid \
+            --jq '.[] | select(.author.login == "app/dependabot" or .author.login == "dependabot[bot]") | select(.headRefOid == "'"${HEAD_SHA}"'") | .number' \
+            | head -n1)"
+          if [ -z "${pr_number}" ]; then
+            echo "::notice::no matching open Dependabot PR for ${HEAD_BRANCH}@${HEAD_SHA}; nothing to do"
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          echo "found=true" >> "${GITHUB_OUTPUT}"
+          echo "number=${pr_number}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check out the merge target
+        if: steps.pr.outputs.found == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # See above: nothing here pushes; do not leave the token on disk.
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+
+      - name: Verify the diff is nothing but pinned-SHA action bumps
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+
+          # Gate 3: every changed file must live under the allowed paths.
+          changed_files="$(gh pr diff "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --name-only)"
+          if [ -z "${changed_files}" ]; then
+            echo "::error::empty diff; refusing to auto-merge"
+            exit 1
+          fi
+          while IFS= read -r changed_file; do
+            case "${changed_file}" in
+              .github/workflows/*.yaml|.github/workflows/*.yml) : ;;
+              .github/actions/*/action.yaml|.github/actions/*/action.yml) : ;;
+              .github/dependabot.yaml) : ;;
+              *)
+                echo "::error::${changed_file} is outside the auto-merge allow-list"
+                exit 1
+                ;;
+            esac
+          done <<< "${changed_files}"
+
+          # Gate 4: every added/removed content line must be a `uses:` pin.
+          # We inspect real +/- lines (excluding diff headers and hunk markers).
+          offending="$(gh pr diff "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+            | grep -E '^[+-]' \
+            | grep -Ev '^(\+\+\+|---)' \
+            | grep -Ev '^[+-][[:space:]]*#' \
+            | grep -Ev '^[+-][[:space:]]*uses:[[:space:]]+[^[:space:]]+@[0-9a-f]{40}([[:space:]]+#.*)?$' \
+            || true)"
+          if [ -n "${offending}" ]; then
+            echo "::error::diff contains non-pin changes; refusing to auto-merge:"
+            printf '%s\n' "${offending}"
+            exit 1
+          fi
+
+          echo "::notice::diff is limited to pinned-SHA action bumps"
+
+      # Approve before merging, because main-protected requires one approving
+      # review AND require_last_push_approval, and there are no bypass actors.
+      #
+      # A bypass for the GitHub Actions app is not an option here: GitHub rejects
+      # it on a personal-account repository --
+      #   "Actor GitHub Actions integration must be part of the ruleset source or
+      #    owner organization"
+      # -- so the approval has to be real rather than waived.
+      #
+      # This is honest rather than circular. The review that matters already
+      # happened in the gates above: PR author is dependabot, every changed file
+      # is in the allow-list, and every changed line is a pinned-SHA `uses:` bump.
+      # This step records that verdict as the approval. require_last_push_approval
+      # is satisfied because the approver (github-actions[bot]) is not the last
+      # pusher (dependabot[bot]).
+      #
+      # Requires "Allow GitHub Actions to create and approve pull requests"
+      # (Settings -> Actions -> General), which is enabled on this repository.
+      - name: Record the gate verdict as an approving review
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh pr review "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --approve \
+            --body 'Approved by dependabot-automerge: diff is confined to pinned-SHA action bumps in the allow-listed paths.'
+
+      - name: Enable auto-merge
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # --match-head-commit pins the merge to the exact commit the content
+          # gates above inspected. Without it this is a time-of-check /
+          # time-of-use hole: --auto does not merge the reviewed commit, it
+          # merges whatever the branch head is once required checks pass. A
+          # commit pushed after the diff was validated would land unreviewed,
+          # even though every gate above ran against the older SHA.
+          gh pr merge "${PR_NUMBER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --squash \
+            --auto \
+            --match-head-commit "${HEAD_SHA}"
+
+          echo "::notice::auto-merge enabled for PR #${PR_NUMBER} pinned to ${HEAD_SHA}"

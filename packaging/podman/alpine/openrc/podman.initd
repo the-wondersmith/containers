@@ -1,0 +1,56 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034  # OpenRC consumes these as globals, not locally.
+#
+# OpenRC equivalent of podman.socket + podman.service.
+#
+# systemd socket-activates podman on demand; OpenRC has no socket activation, so
+# this runs `podman system service` as a supervised long-lived daemon instead.
+# Modelled on Alpine's own community/podman initd so that behaviour and
+# /etc/conf.d/podman knobs match what an Alpine user already expects.
+
+supervisor=supervise-daemon
+
+name="Podman API service"
+description="Listening service that answers API calls for Podman"
+
+command=/usr/bin/podman
+command_args="system service ${podman_opts:=--time 0} ${podman_uri:-}"
+command_user="${podman_user:=root}"
+
+extra_commands="start_containers"
+description_start_containers="Start containers with restart policy set to always or unless-stopped"
+
+depend() {
+  need sysfs cgroups
+}
+
+start_containers() {
+  ebegin "Starting containers with restart policy always or unless-stopped"
+  su "${podman_user}" -s /bin/sh -c \
+    "${command} start --all --filter restart-policy=always --filter restart-policy=unless-stopped"
+  eend $?
+}
+
+start_pre() {
+  if [ "${podman_user}" = "root" ]; then
+    einfo "Configured as rootful service"
+    checkpath -d -m 0755 /run/podman
+  else
+    einfo "Configured as rootless service"
+    case "${podman_uri}" in
+      unix://*)
+        # Create the socket's parent directory writable by $podman_user, but
+        # do not alter the permissions of one that already exists.
+        socket_dir="$(dirname -- "${podman_uri#unix://}")"
+        [ -e "${socket_dir}" ] || checkpath -d -m 0755 -o "${command_user}:" "${socket_dir}"
+        ;;
+    esac
+    modprobe tun
+    modprobe fuse
+  fi
+}
+
+start_post() {
+  start_containers
+}

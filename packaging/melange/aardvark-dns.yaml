@@ -1,0 +1,67 @@
+---
+# aardvark-dns — the authoritative DNS server netavark starts for container
+# name resolution on user-defined networks. Pure Rust, no C dependencies.
+package:
+  name: aardvark-dns
+  version: 2.0.0
+  epoch: 0
+  description: Container-aware DNS server for netavark (static musl build)
+  url: https://github.com/containers/aardvark-dns
+  copyright:
+    - license: Apache-2.0
+
+environment:
+  contents:
+    keyring:
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616a9724.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+    packages:
+      - build-base
+      - busybox
+      - cargo
+      - git
+      - make
+      - rust
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/containers/aardvark-dns
+      tag: v${{package.version}}
+      expected-commit: d98c5990d9bfe25ba8e85cb4202c3272a6e4a5d7
+
+  - name: Build
+    runs: |
+      # See netavark.yaml for why --target is required rather than setting
+      # RUSTFLAGS globally: proc-macro crates must stay dynamic host artifacts.
+      host_triple="$(rustc -vV | sed -n 's/^host: //p')"
+      echo "host triple: ${host_triple}"
+
+      export CARGO_TARGET_DIR=targets
+      export RUSTFLAGS='-C target-feature=+crt-static'
+
+      cargo build --release --target "${host_triple}"
+
+      install -Dm755 "targets/${host_triple}/release/aardvark-dns" bin/aardvark-dns
+
+  - name: Assert the binary is statically linked
+    runs: |
+      if readelf -d bin/aardvark-dns 2> /dev/null | grep -q 'NEEDED'; then
+        echo "FAIL: bin/aardvark-dns is dynamically linked" >&2
+        readelf -d bin/aardvark-dns >&2
+        exit 1
+      fi
+      echo "OK (static): bin/aardvark-dns"
+
+  - name: Install
+    runs: |
+      make \
+        DESTDIR="${{targets.destdir}}" \
+        PREFIX=/usr \
+        install

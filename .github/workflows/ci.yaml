@@ -1,0 +1,95 @@
+---
+name: CI
+
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# Layer `mise.ci.toml` over `mise.toml` so CI only provisions the lint toolchain.
+# Without this, `mise install` would also pull the host-dev-only tools (both Rust
+# toolchains, cargo-binstall) that no CI task uses.
+env:
+  MISE_ENV: ci
+
+jobs:
+  lint:
+    name: Lint & test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+
+      - name: Prepare CI environment
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Run lint
+        shell: bash
+        run: mise run lint
+
+      - name: Run tests
+        shell: bash
+        run: mise run tests
+
+  # Every melange definition is parsed and linted without running a build, so a
+  # malformed component recipe fails on the pull request rather than at 08:00
+  # on a Monday when the upstream watcher fires.
+  melange-definitions:
+    name: Validate melange definitions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      - name: Prepare CI environment
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Compile every melange definition
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          definitions=(packaging/melange/*.yaml)
+
+          if [[ "${#definitions[@]}" -eq 0 ]]; then
+            echo "::error::no melange definitions found under packaging/melange/"
+            exit 1
+          fi
+
+          rc=0
+          for definition in "${definitions[@]}"; do
+            for arch in x86_64 aarch64; do
+              echo "::group::${definition} (${arch})"
+              # `compile` resolves pipelines, substitutions and the package
+              # graph without provisioning a build guest, so it is fast enough
+              # to run on every pull request. Both architectures are checked
+              # because substitutions can differ per target.
+              if ! melange compile "${definition}" --arch "${arch}"; then
+                echo "::error file=${definition}::failed to compile for ${arch}"
+                rc=1
+              fi
+              echo "::endgroup::"
+            done
+          done
+
+          exit "${rc}"

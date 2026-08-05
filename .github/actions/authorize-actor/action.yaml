@@ -1,0 +1,143 @@
+---
+# Fail unless the identity that triggered this run is explicitly trusted.
+#
+# The threat this closes is not "someone opens a pull request" -- that is fine and
+# expected. It is that several workflows here run privileged: the automerge lane
+# holds `contents: write`, the release lane holds `contents: write` plus
+# `id-token: write`, and `ci.yaml` executes the pull request's own `mise.toml`,
+# whose `[hooks]` and `[tasks]` are arbitrary commands. An unknown actor should
+# not reach any of that without a human saying so first.
+#
+# WHAT THIS IS NOT
+# This is defense in depth, not the primary control. The primary control is a
+# repository setting -- Actions -> General -> "Require approval for all external
+# contributors" (or "first-time contributors") -- which stops the runner from
+# ever starting. A workflow-level check necessarily runs *after* the runner has
+# started, so it cannot prevent compute abuse on its own. It does prevent an
+# unapproved actor from reaching a privileged step, and it makes the trust list
+# reviewable in code rather than buried in a settings page. Set both.
+#
+# TRUSTED, and why each is on the list:
+#   the repository owner        the human who owns this repo
+#   dependabot[bot]             opens the pinned-SHA bump PRs the automerge lane
+#                               exists to land; its diffs are additionally gated
+#                               by file allowlist and per-line regex
+#   github-actions[bot]         the default identity for scheduled runs and for
+#                               workflows a workflow dispatches
+#   CODEOWNERS                  anyone listed there is already trusted to review
+#
+# repository_dispatch is checked separately: the payload arrives from another
+# repository (the APT control plane), so the sender rather than the actor is what
+# matters.
+name: authorize-actor
+description: >-
+  Fail the job unless the triggering identity is on the explicit trust list.
+  Defence in depth behind the repository's own approval setting.
+
+inputs:
+  extra-actors:
+    required: false
+    default: ""
+    description: >-
+      Newline- or comma-separated additional logins to trust for this job only.
+  allow-dependabot:
+    required: false
+    default: "true"
+    description: >-
+      Whether dependabot[bot] is trusted here. Set false for jobs that should
+      never run on a bot's behalf, such as anything that publishes.
+
+outputs:
+  actor:
+    description: The login that was evaluated.
+    value: ${{ steps.check.outputs.actor }}
+
+runs:
+  using: composite
+  steps:
+    - name: Authorize the triggering actor
+      id: check
+      shell: bash
+      env:
+        # For workflow_run, github.actor is the actor of the *dispatching* run
+        # and is not reliably the PR author, so prefer the triggering run's actor
+        # when the event carries one. github.triggering_actor covers re-runs,
+        # where github.actor stays the original trigger.
+        EVENT_NAME: ${{ github.event_name }}
+        ACTOR: ${{ github.actor }}
+        TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        RUN_ACTOR: ${{ github.event.workflow_run.actor.login }}
+        SENDER: ${{ github.event.sender.login }}
+        OWNER: ${{ github.repository_owner }}
+        EXTRA: ${{ inputs.extra-actors }}
+        ALLOW_DEPENDABOT: ${{ inputs.allow-dependabot }}
+        CODEOWNERS_PATH: .github/CODEOWNERS
+      run: |
+        set -euo pipefail
+
+        actor="${RUN_ACTOR:-${TRIGGERING_ACTOR:-${ACTOR}}}"
+        echo "actor=${actor}" >> "${GITHUB_OUTPUT}"
+
+        echo "::group::identity"
+        echo "  event:            ${EVENT_NAME}"
+        echo "  github.actor:     ${ACTOR}"
+        echo "  triggering_actor: ${TRIGGERING_ACTOR:-<none>}"
+        echo "  workflow_run:     ${RUN_ACTOR:-<none>}"
+        echo "  sender:           ${SENDER:-<none>}"
+        echo "  evaluated as:     ${actor}"
+        echo "::endgroup::"
+
+        trusted=()
+        trusted+=("${OWNER}")
+        trusted+=("github-actions[bot]")
+
+        if [[ "${ALLOW_DEPENDABOT}" == "true" ]]; then
+          trusted+=("dependabot[bot]" "app/dependabot")
+        fi
+
+        # CODEOWNERS entries are people already trusted to approve changes here,
+        # so treat them as trusted to run them too. Only @logins are taken;
+        # team references (@org/team) cannot be resolved without an API call and
+        # a token, so they are ignored rather than silently half-honoured.
+        if [[ -f "${CODEOWNERS_PATH}" ]]; then
+          while IFS= read -r owner; do
+            [[ -n "${owner}" ]] && trusted+=("${owner}")
+          done < <(
+            grep -vE '^\s*#' "${CODEOWNERS_PATH}" 2> /dev/null \
+              | grep -oE '@[A-Za-z0-9][A-Za-z0-9-]*' \
+              | grep -vE '/' \
+              | tr -d '@' \
+              | sort -u
+          )
+        fi
+
+        while IFS= read -r extra; do
+          [[ -n "${extra}" ]] && trusted+=("${extra}")
+        done < <(printf '%s' "${EXTRA}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+        printf '  trusted: %s\n' "${trusted[*]}"
+
+        for candidate in "${trusted[@]}"; do
+          if [[ "${actor}" == "${candidate}" ]]; then
+            echo "::notice::authorized: ${actor}"
+            exit 0
+          fi
+        done
+
+        # Fail closed, and say exactly what to do about it. A run that stops here
+        # is the intended outcome for an unknown actor, not a malfunction.
+        echo "::error::'${actor}' is not on this repository's trust list; refusing to run."
+        cat >&2 <<EOF
+
+        This job is gated on an explicit allowlist because it can reach
+        privileged operations. To let this run proceed:
+
+          * approve the workflow run in the Actions tab (the repository is
+            configured to require approval for contributors who are not
+            explicitly trusted), or
+          * add the identity to .github/CODEOWNERS if they should be trusted
+            generally, or
+          * pass it to this action's extra-actors input for one specific job.
+
+        EOF
+        exit 1

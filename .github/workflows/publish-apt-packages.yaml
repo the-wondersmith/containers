@@ -2,29 +2,51 @@
 name: Publish to APT repository
 
 # On every published release, tell `the-wondersmith/apt` to ingest the
-# release's `.deb` assets. Authenticated by the APT_DISPATCH_TOKEN secret
-# (a durable, dispatch-only fine-grained PAT). Both this workflow and the
-# `APT_DISPATCH_TOKEN` secret are seeded by the `the-wondersmith/apt`'s
-# onboarding workflow automatically.
+# release's package assets.  Authenticated by the APT_DISPATCH_TOKEN secret
+# (a durable, dispatch-only fine-grained PAT).  Both this workflow and the
+# APT_DISPATCH_TOKEN secret are seeded by the `the-wondersmith/apt` onboarding
+# workflow automatically.
+#
+# NOTE: a Release created by the default GITHUB_TOKEN does NOT fire this
+# event (GitHub anti-recursion rule).  The release.yaml workflow dispatches
+# to the APT control plane directly for CI-created releases.  This workflow
+# covers manual releases created via the GitHub UI.  Ingest is idempotent on
+# (repo, tag) so a rare double-dispatch is harmless.
 
 on:
   release:
     types:
       - published
 
+permissions:
+  contents: read
+
 jobs:
   notify:
+    name: Dispatch publish-deb to APT control plane
     runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch publish-deb to the APT control plane
-        env:
-          GH_TOKEN: ${{ secrets.APT_DISPATCH_TOKEN }}
-          SOURCE_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
 
-        run: |
-          jq -n \
-            --arg tag "${RELEASE_TAG}" \
-            --arg repo "${SOURCE_REPO}" \
-            '{event_type: "publish-deb", client_payload: {tag: $tag, repo: $repo}}' \
-          | gh api -X POST /repos/the-wondersmith/apt/dispatches --input -
+    # Prereleases must not reach the APT repository. A major bump is published
+    # as a prerelease and only promoted after the soak window, at which point
+    # promote-prerelease.yaml dispatches on its own.
+    if: ${{ !github.event.release.prerelease }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+        with:
+          allow-dependabot: "false"
+
+      - name: Notify the APT control plane
+        uses: ./.github/actions/apt-dispatch
+        with:
+          tag: ${{ github.event.release.tag_name }}
+          token: ${{ secrets.APT_DISPATCH_TOKEN }}

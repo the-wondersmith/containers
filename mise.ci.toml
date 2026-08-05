@@ -1,0 +1,26 @@
+# Some of the tools are not needed in CI, so we include only the required tools here.
+
+[settings]
+# Everything CI actually invokes, and nothing else. Omitted deliberately:
+# rust/rust-nightly/cargo-binstall, which exist for host development -- the Rust
+# components are compiled inside melange's Alpine guest from its own toolchain,
+# not from mise's.
+enable_tools = [
+    "actionlint",
+    "editorconfig-checker",
+    # Provides the podman glibc build's toolchain, replacing a go.dev download.
+    "go",
+    # Read the components JSON and the release manifest.
+    "jq",
+    # `melange compile` on every PR; `melange build` in the component jobs.
+    "melange",
+    # Pushes and pulls the GHCR component cache.
+    "oras",
+    "shellcheck",
+    "shfmt",
+    # Required for yamllint, which has no binary release and resolves to
+    # pipx:yamllint. See mise.toml.
+    "uv",
+    "yamllint",
+    "yq",
+]

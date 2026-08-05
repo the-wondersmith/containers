@@ -1,0 +1,9 @@
+# Configuration for /etc/init.d/netavark-dhcp-proxy
+#
+# Extra arguments for `netavark dhcp-proxy`.
+#
+# Note that `-a <seconds>` (activity timeout) is intentionally NOT set by
+# default. It exists so systemd can let an idle proxy exit and socket-activate
+# it again on demand; OpenRC has no socket activation, so a timeout here would
+# stop the proxy permanently.
+#netavark_dhcp_proxy_opts=""

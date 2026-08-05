@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh
+# shellcheck disable=SC2034  # OpenRC consumes these as globals, not locally.
+#
+# OpenRC equivalent of netavark-dhcp-proxy.socket + netavark-dhcp-proxy.service.
+#
+# There is no upstream OpenRC unit for this and Alpine's netavark aport ships
+# none, so this is ours. It serves the same purpose as the systemd pair: a proxy
+# that lets macvlan/ipvlan networks take addresses from a real LAN DHCP server
+# instead of podman's internal IPAM, selected per network with
+# `--ipam-driver=dhcp`.
+#
+# One deliberate difference from the systemd unit: upstream passes `-a 30`, an
+# activity timeout that lets the daemon exit when idle because systemd will
+# socket-activate it again on the next request. OpenRC has no socket activation,
+# so a timeout here would simply stop the proxy and never bring it back. The
+# default below therefore omits it and the daemon stays supervised; override
+# netavark_dhcp_proxy_opts in /etc/conf.d/netavark-dhcp-proxy to change that.
+
+supervisor=supervise-daemon
+
+name="Netavark DHCP proxy"
+description="Proxies DHCP requests for macvlan/ipvlan container networks"
+
+command=/usr/libexec/podman/netavark
+command_args="dhcp-proxy ${netavark_dhcp_proxy_opts:-}"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  # The proxy binds its socket under /run/podman; the podman service creates
+  # that directory too, but this service must not depend on podman running.
+  checkpath -d -m 0755 /run/podman
+}

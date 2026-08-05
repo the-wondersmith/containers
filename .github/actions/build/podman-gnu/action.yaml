@@ -1,0 +1,215 @@
+---
+# The one component melange cannot produce.
+#
+# Everything else in this bundle is a static musl build shared by both the .deb
+# and the .apk. podman for Debian is the deliberate exception: keeping the
+# journald log driver means keeping the `systemd` build tag, which means
+# linking against libsystemd, which exists neither on musl nor in Wolfi. So
+# this component is built the old-fashioned way, in debian:trixie.
+#
+# Two consequences worth being explicit about:
+#   * the resulting binary is dynamically linked, so the .deb carries a real
+#     ${shlibs:Depends} and installs on trixie-or-newer rather than anywhere;
+#   * `make install.systemd` is an empty target unless the systemd tag is
+#     present, so this build is also what supplies the unit files.
+#
+# Build tags are probed from installed headers exactly as in the melange
+# definitions -- the apt list below IS the build configuration. The one
+# addition is containers_image_openpgp, applied here as well as on musl so that
+# image signature verification behaves identically in both packages and so that
+# libgpgme is not pulled in as a further runtime dependency. Drop it from
+# EXTRA_BUILDTAGS and add libgpgme-dev to restore stock-Debian gpgme behaviour.
+name: build-podman-gnu
+description: >-
+  Build podman from source against glibc with the systemd build tag, for the
+  Debian package. Produces a DESTDIR fragment matching the layout of the
+  melange-built musl components.
+
+inputs:
+  version:
+    required: true
+    description: Upstream podman version without a leading `v`, e.g. 6.0.2.
+  commit:
+    required: true
+    description: >-
+      Resolved upstream commit SHA to build. Pinned by the caller rather than
+      resolved here, so the build is reproducible and the cache key honest.
+  destdir:
+    required: true
+    description: Staging root for the DESTDIR install.
+
+outputs:
+  destdir:
+    description: Staging root that was populated (echo of the input).
+    value: ${{ inputs.destdir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install build dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -q
+
+        # libsystemd-dev  -> systemd tag  -> journald and unit files
+        # libsubid-dev    -> libsubid tag -> NSS-backed subuid/subgid ranges
+        # libbtrfs-dev    -> btrfs graphdriver stays compiled in
+        # libseccomp-dev  -> seccomp is added unconditionally on Linux, so its
+        #                    headers must be present or the build fails outright
+        # libgpgme-dev is intentionally absent; see the header comment.
+        apt-get install -y --no-install-recommends \
+          binutils \
+          build-essential \
+          ca-certificates \
+          curl \
+          git \
+          go-md2man \
+          libbtrfs-dev \
+          libseccomp-dev \
+          libselinux1-dev \
+          libsubid-dev \
+          libsystemd-dev \
+          make \
+          pkg-config \
+          python3
+
+    # Go comes from mise, pinned by mise.lock, exactly as every other tool does.
+    #
+    # This step used to download a tarball from go.dev. First with no
+    # verification at all, then with a hand-maintained SHA-256 per architecture
+    # and a version guard -- which worked, but duplicated in action YAML what the
+    # lockfile already records for linux-x64, linux-arm64 and macos-arm64, and
+    # created a second place where a Go version could drift.
+    #
+    # NOTE: trixie ships Go 1.24 and podman 6 requires >= 1.25.9, so the distro
+    # toolchain is not an option here regardless.
+    - name: Provision the tool set
+      uses: ./.github/actions/prepare-ci-env
+
+    - name: Check out podman at the pinned commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      with:
+        # See above: nothing here pushes; do not leave the token on disk.
+        persist-credentials: false
+        repository: containers/podman
+        ref: ${{ inputs.commit }}
+        path: src/podman-gnu
+        fetch-depth: 1
+
+    - name: Build
+      shell: bash
+      working-directory: src/podman-gnu
+      run: |
+        set -euo pipefail
+
+        # podman bakes a build timestamp into the binary via ldflags unless
+        # SOURCE_DATE_EPOCH is set. melange pins this to 0 for the musl
+        # components; match it so both halves of the bundle are equally
+        # reproducible and the component cache key stays meaningful.
+        export SOURCE_DATE_EPOCH=0
+        export GOFLAGS='-trimpath'
+
+        echo "::group::probed build tags"
+        echo "apparmor:  $(hack/apparmor_tag.sh)"
+        echo "btrfs:     $(hack/btrfs_installed_tag.sh)"
+        echo "sqlite:    $(hack/sqlite_tag.sh)"
+        echo "systemd:   $(hack/systemd_tag.sh)"
+        echo "libsubid:  $(hack/libsubid_tag.sh)"
+        echo "::endgroup::"
+
+        # The systemd tag is the entire reason this component exists. If the
+        # probe comes back empty, libsystemd-dev is missing and the package
+        # would silently lose journald and every unit file -- fail instead.
+        if [[ -z "$(hack/systemd_tag.sh)" ]]; then
+          echo "::error::systemd build tag not detected; libsystemd-dev missing"
+          exit 1
+        fi
+
+        mise x -- make binaries \
+          PREFIX=/usr \
+          HELPER_BINARIES_DIR=/usr/libexec/podman \
+          EXTRA_BUILDTAGS='containers_image_openpgp'
+
+        # install.man installs the generated man pages but does not depend on
+        # the rule that generates them.
+        mise x -- make docs
+
+    - name: Install into the staging tree
+      shell: bash
+      working-directory: src/podman-gnu
+      env:
+        DESTDIR: ${{ inputs.destdir }}
+      run: |
+        set -euo pipefail
+
+        mkdir -p "${DESTDIR}"
+
+        mise x -- make \
+          DESTDIR="${DESTDIR}" \
+          PREFIX=/usr \
+          HELPER_BINARIES_DIR=/usr/libexec/podman \
+          install.bin install.remote install.man install.completions install.systemd
+
+    - name: Assert the linkage matches the allowlist
+      shell: bash
+      env:
+        DESTDIR: ${{ inputs.destdir }}
+      run: |
+        set -euo pipefail
+
+        # FAIL CLOSED. An earlier version of this check filtered candidates with
+        # `file -b ... | grep -q ELF`, but `file` is not installed in a bare
+        # debian image and was not in the apt list above. Every binary was
+        # therefore skipped and the gate reported success having inspected
+        # nothing. A check that silently passes is worse than no check, so the
+        # tool it depends on is asserted up front and the ELF test is now
+        # readelf's own exit status: it fails on non-ELF, succeeds with no
+        # NEEDED lines on a static binary, and lists them on a dynamic one.
+        if ! command -v readelf > /dev/null 2>&1; then
+          echo "::error::readelf not found; cannot verify linkage"
+          exit 1
+        fi
+
+        # This component is expected to be dynamic, but only against a known
+        # set. Anything new appearing here means upstream picked up a dependency
+        # nobody reviewed, which is what the rule exists to catch.
+        #
+        # libsystemd is deliberately absent: podman reaches journald through
+        # go-systemd's sdjournal, which dlopens libsystemd.so.0 rather than
+        # linking it, so it never appears as a NEEDED entry. That is also why
+        # debian/control.in has to depend on libsystemd0 explicitly --
+        # dh_shlibdeps cannot see a dlopen.
+        allowed='^(libc|libm|libseccomp|libsubid|libbtrfs|libselinux|libgcc_s|libpthread|libdl|librt)\.so'
+
+        rc=0
+        checked=0
+
+        while IFS= read -r binary; do
+          readelf -d "${binary}" > /dev/null 2>&1 || continue
+          checked=$((checked + 1))
+
+          while IFS= read -r lib; do
+            if [[ ! "${lib}" =~ ${allowed} ]]; then
+              echo "::error::${binary} links against unexpected library: ${lib}"
+              rc=1
+            fi
+          done < <(
+            readelf -d "${binary}" 2> /dev/null \
+              | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'
+          )
+        done < <(find "${DESTDIR}" -type f -perm -u+x)
+
+        # A run that inspected nothing means the payload or the discovery broke.
+        if [[ "${checked}" -eq 0 ]]; then
+          echo "::error::linkage check inspected 0 binaries; refusing to pass"
+          exit 1
+        fi
+
+        if [[ "${rc}" -eq 0 ]]; then
+          echo "linkage allowlist satisfied across ${checked} binaries"
+        fi
+
+        exit "${rc}"

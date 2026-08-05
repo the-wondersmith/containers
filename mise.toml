@@ -1,0 +1,737 @@
+[hooks]
+enter = [
+    "{{ mise_bin }} install",
+    "pre-commit install --install-hooks",
+]
+
+[env]
+_.path = "{{ config_root }}/.local/bin"
+
+[vars]
+# Check if running in CI context (e.g. GitHub Actions)
+ci = "{{ env.CI is defined and env.CI == 'true' }}"
+
+[tool_alias]
+rust-nightly = "core:rust"
+
+[tools]
+act = "latest"
+actionlint = "latest"
+cargo-binstall = "latest"
+editorconfig-checker = "latest"
+go = "latest"
+jq = "latest"
+melange = "latest"
+oras = "latest"
+pre-commit = "latest"
+shellcheck = "latest"
+shfmt = "latest"
+uv = "latest"
+yamllint = "latest"
+yq = "latest"
+
+[tools.rust]
+profile = "default"
+version = "latest"
+components = "cargo,clippy"
+
+[tools.rust-nightly]
+profile = "minimal"
+version = "nightly"
+components = "cargo,rustfmt"
+
+[settings]
+lockfile = true
+gpg_verify = true
+auto_install = true
+experimental = true
+
+[settings.go]
+set_gobin = true
+set_goroot = true
+
+[settings.status]
+missing_tools = "always"
+
+[tasks.lint]
+description = "Run all lint checks"
+depends = [
+    "lint:shell",
+    "lint:yaml",
+    "lint:actions",
+    "lint:editorconfig",
+    "lint:melange",
+]
+
+[tasks."lint:shell"]
+hide = true
+description = "Shellcheck the maintainer/dev shell scripts"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Repo-authored shell only. Everything pruned below is gitignored build output
+# or throwaway scratch; linting it produces noise about code we did not write
+# and do not ship. Note that .github/ must NOT be pruned -- the acceptance suite
+# lives there and is very much ours.
+#
+# find -exec only runs the command when at least one file matches, so both tools
+# tolerate a repo with zero shell scripts without failing.
+prune=(
+  -path './.git' -o
+  -path './packages' -o
+  -path './dist' -o
+  -path './melange-cache' -o
+  -path './.melange-src' -o
+  -path './.melange-logs' -o
+  -path './.deb-verify' -o
+  -path './.act-logs' -o
+  -path './.melange-build' -o
+  -path './.melange-workspace' -o
+  # Upstream sources the build actions check out (src/<component>). Ephemeral in
+  # CI; persistent locally when act runs with --bind against the real workspace.
+  -path './src'
+)
+
+find . \( "${prune[@]}" \) -prune -o -name '*.sh' -exec shellcheck {} +
+find . \( "${prune[@]}" \) -prune -o -name '*.sh' -exec shfmt -d -i 2 -ci -bn -sr {} +
+
+# Shell under packaging/ carries no .sh suffix: OpenRC init scripts, their
+# conf.d fragments, and helper scripts installed into libexec. Detected by
+# shebang rather than by name, so a new one is never silently skipped.
+#
+# --shell=sh because these are POSIX sh. The exclusions are all OpenRC
+# artefacts: it sources init scripts rather than executing them (SC2148, no
+# shebang needed), consumes their assignments as globals (SC2034, "unused"), and
+# injects settings from the matching /etc/conf.d file (SC2154, "referenced but
+# not assigned").
+#
+# The shebang test uses `if` rather than `cmd && echo`: with `set -o pipefail`
+# the && form leaks grep's non-zero status out of the loop's final iteration
+# whenever the last file examined is not shell, failing the whole task.
+shell_in_packaging() {
+  find packaging -type f | while IFS= read -r f; do
+    case "${f}" in
+      *.initd | *.confd)
+        echo "${f}"
+        ;;
+      *)
+        if head -n1 "${f}" 2> /dev/null | grep -q '^#!.*sh'; then
+          echo "${f}"
+        fi
+        ;;
+    esac
+  done
+}
+
+shell_in_packaging | xargs -r shellcheck --shell=sh --exclude=SC2034,SC2148,SC2154
+shell_in_packaging | xargs -r shfmt -d -i 2 -ci -bn -sr
+'''
+
+[tasks."lint:yaml"]
+hide = true
+description = "Lint YAML files"
+run = "yamllint -c .yamllint.yaml {{ config_root }}"
+
+[tasks."lint:actions"]
+hide = true
+description = "Lint GitHub Actions workflows"
+run = "actionlint"
+
+[tasks."lint:editorconfig"]
+hide = true
+description = "Check files against .editorconfig"
+# The editorconfig-checker tool installs its binary as `ec`, not as the tool name.
+run = "ec"
+
+[tasks."lint:melange"]
+hide = true
+description = "Validate every melange component definition"
+# `melange compile` resolves pipelines, substitutions and the package graph
+# without provisioning a build guest, so it is fast and needs no container.
+# Both architectures are checked because substitutions can differ per target.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+rc=0
+
+for definition in packaging/melange/*.yaml; do
+  for arch in x86_64 aarch64; do
+    if ! melange compile "${definition}" --arch "${arch}" > /dev/null; then
+      echo "FAILED: ${definition} (${arch})" >&2
+      rc=1
+    fi
+  done
+done
+
+if [[ "${rc}" -eq 0 ]]; then
+  echo "all melange definitions compile"
+fi
+
+exit "${rc}"
+'''
+
+[tasks.clean]
+description = "Remove build artifacts"
+# Everything listed here is gitignored and reproducible. Paths are relative to
+# config_root, so this can never reach outside the project directory.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+rm -rf packages melange-cache .melange-src .melange-logs dist
+
+echo "cleaned"
+'''
+
+[tasks.build]
+description = "Build every component and assemble the Alpine bundle locally"
+# Local builds use the same melange definitions CI does, so a failure here is a
+# failure there. melange provisions its own Alpine build guest via docker, which
+# is why this works unchanged on macOS.
+#
+# The glibc podman component is NOT built here: it needs a Debian environment
+# and only feeds the .deb. Use `mise run build:deb` for that half.
+depends = [
+    "build:components",
+]
+run = "mise run build:bundle"
+
+[tasks."build:components"]
+description = "Build all static musl components via melange"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+arch="$(uname -m)"
+case "${arch}" in
+  arm64) arch=aarch64 ;;
+  amd64) arch=x86_64 ;;
+esac
+
+mkdir -p .melange-logs
+
+for component in catatonit netavark aardvark-dns buildah podman; do
+  echo "==> ${component} (${arch})"
+  melange build "packaging/melange/${component}.yaml" \
+    --arch "${arch}" \
+    --runner docker \
+    --out-dir ./packages \
+    --generate-provenance \
+    --namespace local \
+    > ".melange-logs/${component}.log" 2>&1 \
+    || { echo "FAILED: see .melange-logs/${component}.log" >&2; exit 1; }
+done
+
+echo "components built into ./packages/${arch}"
+'''
+
+[tasks."build:bundle"]
+description = "Assemble the Alpine podman bundle from built components"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+arch="$(uname -m)"
+case "${arch}" in
+  arm64) arch=aarch64 ;;
+  amd64) arch=x86_64 ;;
+esac
+
+if ! compgen -G "packages/${arch}/*.apk" > /dev/null; then
+  echo "no components in packages/${arch}; run 'mise run build:components' first" >&2
+  exit 1
+fi
+
+rm -rf .melange-src
+mkdir -p .melange-src/components
+cp packages/"${arch}"/*.apk .melange-src/components/
+# The bundle reads its Alpine-specific inputs from alpine/. The helpers fragment
+# is shared with the Debian package, so it lives one level up and is copied in.
+cp -r packaging/podman/alpine .melange-src/alpine
+cp packaging/podman/50-bundled-helpers.conf .melange-src/alpine/
+
+melange build packaging/melange/podman-bundle.yaml \
+  --arch "${arch}" \
+  --runner docker \
+  --source-dir ./.melange-src \
+  --out-dir ./dist \
+  --generate-provenance \
+  --namespace local
+
+echo "bundle written to ./dist/${arch}"
+'''
+
+[tasks."build:deb"]
+description = "Build the .deb locally by running the real CI jobs under act"
+# Deliberately NOT a parallel local reimplementation of the packaging logic.
+# The .deb is assembled by .github/actions/package/podman/debian and the glibc
+# podman by .github/actions/build/podman-gnu; a second local copy of that would
+# drift from CI, and drift is exactly what this repository keeps getting bitten
+# by. act runs those same actions, so a pass here means the CI path works.
+depends = [
+    "act:deb",
+]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+# act:deb runs with --bind, so the packaging action's ${GITHUB_WORKSPACE}/dist
+# IS this directory -- no artifact server round-trip to unpick.
+if compgen -G "dist/*.deb" > /dev/null; then
+  echo "built:"
+  ls -1 dist/*.deb | sed 's/^/  /'
+else
+  echo "no .deb in ./dist; see the act output above" >&2
+  exit 1
+fi
+'''
+
+# ── act ───────────────────────────────────────────────────────────────────────
+# Run the real workflows locally. See .actrc for the shared flags and
+# .act/events/ for the event payload fixtures.
+
+[tasks."versions:refresh"]
+description = "Point the melange definitions at the current upstream releases"
+# The committed version and expected-commit in each definition are a snapshot:
+# "the versions this repository was last verified against". CI does not read them
+# -- upstream-watch resolves upstream live and the build overwrites them in a
+# copy -- but LOCAL builds and every act run do, because the act fixtures are
+# derived from them. Left alone they drift, and `mise run build` quietly builds
+# something older than what CI releases.
+#
+# This resolves upstream the same way upstream-watch does (newest vX.Y.Z tag,
+# peeled to a commit) and rewrites the definitions in place. It does not commit;
+# review the diff.
+#
+# sed rather than `yq -i` deliberately: yq preserves comments but strips every
+# blank line, which would reflow all six definitions on each refresh. Both fields
+# occur exactly once per file, so a targeted substitution is unambiguous.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+latest_tag() {
+  git ls-remote --tags --refs "${1}" \
+    | awk '{print $2}' \
+    | sed 's|refs/tags/||' \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V \
+    | tail -n1
+}
+
+# Rewrite a file through sed, portably.
+#
+# `sed -i` cannot be spelled portably. GNU sed takes an OPTIONAL suffix that must
+# be ATTACHED (-i.bak), so a bare -i means "no backup". BSD/macOS sed takes a
+# MANDATORY SEPARATE argument, so a bare -i consumes whatever follows as the
+# suffix. `sed -i'' -e ...` collapses to argv `-i` and therefore does the right
+# thing on Linux while on macOS it eats the `-e` and writes backups named
+# <file>-e -- which is exactly how this task once littered packaging/melange with
+# six .yaml-e files.
+#
+# So: no -i. Redirect to a temp file, then cat it back over the original, which
+# preserves the file's mode, owner and inode. The && matters -- if sed fails the
+# original is left untouched rather than truncated.
+rewrite() {
+  local file="${1}" tmp
+  shift
+
+  tmp="$(mktemp)"
+  if sed "$@" "${file}" > "${tmp}"; then
+    cat "${tmp}" > "${file}"
+    rm -f "${tmp}"
+  else
+    rm -f "${tmp}"
+    echo "FAILED to rewrite ${file}" >&2
+    return 1
+  fi
+}
+
+declare -A new_version=()
+changed=0
+major=0
+
+for definition in packaging/melange/*.yaml; do
+  component="$(basename "${definition}" .yaml)"
+  [[ "${component}" == "podman-bundle" ]] && continue
+
+  repository="$(
+    mise x -- yq -r \
+      '(.pipeline[] | select(.uses == "git-checkout") | .with.repository) // ""' \
+      "${definition}"
+  )"
+
+  if [[ -z "${repository}" ]]; then
+    echo "skip ${component}: no git-checkout repository" >&2
+    continue
+  fi
+
+  current="$(mise x -- yq -r '.package.version' "${definition}")"
+
+  tag="$(latest_tag "${repository}")"
+  if [[ -z "${tag}" ]]; then
+    echo "FAILED to resolve a version tag for ${component} from ${repository}" >&2
+    exit 1
+  fi
+  version="${tag#v}"
+
+  # Peel the annotated tag to the commit it points at, so the build pins a SHA.
+  commit="$(git ls-remote "${repository}" "refs/tags/${tag}^{}" | awk '{print $1}')"
+  [[ -n "${commit}" ]] || commit="$(git ls-remote "${repository}" "refs/tags/${tag}" | awk '{print $1}')"
+
+  if [[ -z "${commit}" ]]; then
+    echo "FAILED to resolve a commit for ${component} ${tag}" >&2
+    exit 1
+  fi
+
+  new_version["${component}"]="${version}"
+
+  if [[ "${current}" == "${version}" ]]; then
+    printf '  %-14s %-10s unchanged\n' "${component}" "${version}"
+  else
+    printf '  %-14s %-10s <- %s\n' "${component}" "${version}" "${current}"
+    changed=1
+    [[ "${version%%.*}" != "${current%%.*}" ]] && major=1
+  fi
+
+  rewrite "${definition}" \
+    -e "s|^  version: .*|  version: ${version}|" \
+    -e "s|^\( *\)expected-commit: .*|\1expected-commit: ${commit}|"
+done
+
+# The bundle is not a component: its version tracks podman, and its versioned
+# provides must match the components actually bundled or apk resolution lies.
+# One pass, so the file is rewritten once rather than five times.
+bundle=packaging/melange/podman-bundle.yaml
+bundle_edits=()
+
+if [[ -n "${new_version[podman]:-}" ]]; then
+  bundle_edits+=(-e "s|^  version: .*|  version: ${new_version[podman]}|")
+fi
+
+for component in aardvark-dns buildah catatonit netavark; do
+  v="${new_version[${component}]:-}"
+  [[ -n "${v}" ]] || continue
+  bundle_edits+=(-e "s|^      - ${component}=.*|      - ${component}=${v}|")
+done
+
+# Tested via [*] rather than an array length, because mise renders task scripts
+# through Tera and the `${#` of `${#bundle_edits[@]}` opens a Tera comment, which
+# then fails to parse for want of a closing `#}`.
+if [[ -n "${bundle_edits[*]:-}" ]]; then
+  rewrite "${bundle}" "${bundle_edits[@]}"
+fi
+
+echo
+if [[ "${changed}" -eq 0 ]]; then
+  echo "already current; nothing rewritten"
+else
+  echo "definitions rewritten -- review with: git diff packaging/melange/"
+  if [[ "${major}" -eq 1 ]]; then
+    echo
+    echo "NOTE: a component crossed a MAJOR version. In CI that lands as a"
+    echo "      prerelease and soaks before promotion; locally it just builds."
+    echo "      Check podman still drives the bundled netavark/aardvark-dns."
+  fi
+fi
+'''
+
+[tasks."act:fixtures"]
+description = "Generate the act event payloads (regenerated only when their inputs change)"
+# The fixtures are build artifacts, not source. They used to be committed, which
+# meant the component versions in workflow_dispatch-build.json would silently go
+# stale -- `act:components` would build last year's podman while looking like it
+# had verified current state.
+#
+# They are derived from the melange definitions instead, so the payload always
+# agrees with what the repository declares it builds, and `sources`/`outputs`
+# gate regeneration on a genuine file dependency rather than a guess. Use
+# `mise run act:fixtures --force` to rebuild them unconditionally.
+sources = [
+    "mise.toml",
+    "packaging/melange/*.yaml",
+]
+outputs = [
+    ".act/events/schedule.json",
+    ".act/events/workflow_dispatch-build.json",
+    ".act/events/workflow_dispatch-prune.json",
+    ".act/events/workflow_run-dependabot.json",
+    ".act/events/release-published.json",
+]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+mkdir -p .act/events
+
+python3 - <<'GEN'
+import json, pathlib, re, subprocess
+
+root = pathlib.Path(".")
+events = root / ".act/events"
+
+# owner/name from the git remote, so the payloads are not hardcoded to one fork.
+remote = subprocess.run(["git", "remote", "get-url", "origin"],
+                        capture_output=True, text=True).stdout.strip()
+m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", remote)
+owner, name = (m.group(1), m.group(2)) if m else ("the-wondersmith", "containers")
+repo = {"name": name, "full_name": f"{owner}/{name}",
+        "default_branch": "main", "owner": {"login": owner}}
+
+def yq(path, expr):
+    return subprocess.run(["yq", "-r", expr, str(path)],
+                          capture_output=True, text=True).stdout.strip()
+
+# Component set and versions come from the definitions themselves. podman-bundle
+# is the assembled package, not a component, so it is excluded.
+components = {}
+for d in sorted((root / "packaging/melange").glob("*.yaml")):
+    if d.stem == "podman-bundle":
+        continue
+    components[d.stem] = {
+        "version": yq(d, ".package.version"),
+        "commit": yq(d, '(.pipeline[] | select(.uses == "git-checkout") | .with.expected-commit) // ""'),
+    }
+
+def write(fname, payload):
+    (events / fname).write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"  {fname}")
+
+print("generated:")
+write("workflow_dispatch-build.json", {
+    "inputs": {"components": json.dumps(components), "pkgrel": "1"},
+    "repository": repo,
+})
+write("workflow_dispatch-prune.json", {
+    "inputs": {"keep": "10", "dry-run": "true"},
+    "repository": repo,
+})
+write("schedule.json", {"schedule": "0 8 * * 1", "repository": repo})
+# Deliberately a branch and SHA that do not exist: act:automerge exercises the
+# no-matching-PR path. The happy path needs a real Dependabot PR.
+write("workflow_run-dependabot.json", {
+    "action": "completed",
+    "workflow_run": {
+        "id": 1,
+        "name": "CI",
+        "event": "pull_request",
+        "conclusion": "success",
+        "head_branch": "dependabot/github_actions/fixture",
+        "head_sha": "0" * 40,
+        "actor": {"login": "dependabot[bot]"},
+    },
+    "repository": repo,
+})
+podman = components.get("podman", {}).get("version", "0.0.0")
+write("release-published.json", {
+    "action": "published",
+    "release": {"tag_name": f"v{podman}-1", "prerelease": False, "draft": False},
+    "repository": repo,
+})
+GEN
+'''
+
+[tasks."act:doctor"]
+description = "Check that act can run here, and say what cannot be run locally"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+fail=0
+
+if command -v act > /dev/null 2>&1; then
+  echo "ok      act: $(act --version)"
+else
+  echo "MISSING act: install it (mise use act@latest, or brew install act)" >&2
+  fail=1
+fi
+
+if docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}' > /dev/null 2>&1; then
+  echo "ok      docker: $(docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}')"
+else
+  echo "MISSING docker: act needs a running daemon" >&2
+  fail=1
+fi
+
+# act sources github.token from the gh CLI -- verified: the token act exposes
+# is byte-identical to `gh auth token`. So there is nothing to put in .secrets
+# for ordinary runs; mise-action forwards it as MISE_GITHUB_TOKEN and tool
+# downloads are authenticated.
+if gh auth status > /dev/null 2>&1; then
+  echo "ok      gh: logged in, so act will populate github.token"
+else
+  echo "WARNING gh is not logged in. act will fall back to an empty token and" >&2
+  echo "        mise tool downloads may hit unauthenticated API rate limits." >&2
+  echo "        Fix with: gh auth login" >&2
+fi
+
+# Runner images, container architecture, privileged mode and the artifact server
+# all come from ~/.actrc. This repo deliberately ships no .actrc of its own.
+if [[ -f "${HOME}/.actrc" ]]; then
+  echo "ok      ~/.actrc present ($(grep -c . "${HOME}/.actrc") settings)"
+else
+  cat >&2 <<'EOF'
+WARNING no ~/.actrc.
+
+  act needs at least runner-image mappings, including one for the
+  ubuntu-24.04-arm label the arm64 matrix legs use, e.g.
+
+    --platform ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest
+    --platform ubuntu-24.04-arm=ghcr.io/catthehacker/ubuntu:act-24.04
+    --container-options "--privileged"
+
+EOF
+fi
+
+cat <<'EOF'
+
+Runnable under act:
+  act:lint        ci.yaml            lint + melange definition validation
+  act:components  build-podman...    melange component builds + GHCR cache probe
+  act:apk         build-podman...    Alpine bundle assembly
+  act:watch       upstream-watch     upstream resolution and classification
+  act:prune       prune-components   GHCR pruning, dry-run
+  act:automerge   dependabot-...     the auto-merge gates, against a fixture
+  act:apt-notify  publish-apt-...    the release-published dispatch path
+
+NOT runnable under act, and why:
+  release.yaml publish  needs OIDC (id-token: write) for the SLSA attestation;
+                        act cannot mint a Sigstore token, so attest-build-
+                        provenance cannot run. Everything before it can.
+  podman-gnu,           `container:` jobs. jdx/mise-action is a Node action, and
+  package-debian        GitHub's runner injects node into container jobs whereas
+  (act:deb)             act does not:
+                          exec: "node": executable file not found in $PATH
+                        Not a defect in these jobs -- they work on GitHub, whose
+                        runner mounts its own node. Verify them natively instead:
+                        the glibc podman build and a real .deb assembled from
+                        real components have both been exercised directly.
+  the GHCR cache push   needs real registry credentials. act:components probes
+                        for a cache hit and builds on a miss; `save` is skipped
+                        unless .secrets carries a token with packages:write.
+EOF
+
+exit "${fail}"
+'''
+
+[tasks."act:lint"]
+description = "act: ci.yaml (lint + melange definitions)"
+depends = ["act:fixtures"]
+run = "act push"
+
+[tasks."act:components"]
+description = "act: build the melange components (probes the GHCR cache first)"
+depends = ["act:fixtures"]
+# --bind gives the job the host workspace instead of a copy, so melange's
+# `--runner docker` can reach the daemon socket the catthehacker image exposes.
+run = '''
+act workflow_dispatch \
+  -W .github/workflows/build-podman-packages.yaml \
+  -j components \
+  -e .act/events/workflow_dispatch-build.json \
+  --bind
+'''
+
+[tasks."act:deb"]
+description = "act: build the glibc podman component and assemble the .deb"
+depends = ["act:fixtures"]
+# A single -j deliberately: act honours only the LAST -j flag, so
+# `-j podman-gnu -j package-debian` silently ran neither podman-gnu nor its
+# dependents. Naming just the terminal job lets `needs:` pull in components and
+# podman-gnu, which is what actually happens on GitHub.
+run = '''
+act workflow_dispatch \
+  -W .github/workflows/build-podman-packages.yaml \
+  -j package-debian \
+  -e .act/events/workflow_dispatch-build.json \
+  --bind
+'''
+
+[tasks."act:apk"]
+description = "act: assemble the Alpine bundle from built components"
+depends = ["act:fixtures"]
+run = '''
+act workflow_dispatch \
+  -W .github/workflows/build-podman-packages.yaml \
+  -j package-alpine \
+  -e .act/events/workflow_dispatch-build.json \
+  --bind
+'''
+
+[tasks."act:watch"]
+description = "act: upstream-watch detection and classification (no release)"
+depends = ["act:fixtures"]
+run = '''
+act workflow_dispatch \
+  -W .github/workflows/upstream-watch.yaml \
+  -j detect \
+  -e .act/events/schedule.json
+'''
+
+[tasks."act:prune"]
+description = "act: prune-components in dry-run"
+depends = ["act:fixtures"]
+run = '''
+act workflow_dispatch \
+  -W .github/workflows/prune-components.yaml \
+  -e .act/events/workflow_dispatch-prune.json
+'''
+
+[tasks."act:automerge"]
+description = "act: the dependabot auto-merge gates against a fixture payload"
+depends = ["act:fixtures"]
+run = '''
+act workflow_run \
+  -W .github/workflows/dependabot-automerge.yaml \
+  -e .act/events/workflow_run-dependabot.json
+'''
+
+[tasks."act:apt-notify"]
+description = "act: the release-published APT dispatch path"
+depends = ["act:fixtures"]
+run = '''
+act release \
+  -W .github/workflows/publish-apt-packages.yaml \
+  -e .act/events/release-published.json
+'''
+
+[tasks.tests]
+description = "Run all tests"
+# The acceptance suite needs a built package and privileged container access;
+# it runs in CI via .github/workflows/test-podman-packages.yaml. What is
+# runnable without a build is definition validation, which lint already covers.
+depends = [
+    "lint:melange",
+]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Definition validation passed."
+echo
+echo "The behavioural acceptance suite (.github/scripts/acceptance.sh) needs a"
+echo "built package plus privileged container access, so it runs in CI. To"
+echo "exercise it locally:"
+echo
+echo "  mise run build"
+echo "  docker run --rm --privileged --cgroupns=host \\"
+echo "    -v \"\$PWD/dist/\$(uname -m):/pkg:ro\" \\"
+echo "    -v \"\$PWD/.github/scripts:/scripts:ro\" \\"
+echo "    -e DISTRO=alpine -e COMPONENTS=\"\$(cat manifest.json)\" \\"
+echo "    alpine:3.23 /bin/sh /scripts/acceptance.sh"
+'''

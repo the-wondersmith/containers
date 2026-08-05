@@ -1,0 +1,67 @@
+---
+# Install mise and, through it, every tool CI uses.
+#
+# mise.toml plus mise.lock are the single source of truth for tooling. This
+# action deliberately does nothing except hand that job to mise: no
+# actions/setup-*, no tarball downloads, no apt-get for anything mise carries.
+# Versions and per-platform checksums come from the lockfile.
+#
+# MISE_ENV=ci selects mise.ci.toml, which narrows the tool set to what CI
+# actually invokes -- notably excluding both Rust toolchains, since the Rust
+# components are compiled inside melange's Alpine guest from its own toolchain
+# rather than from mise's.
+#
+# Previously this also ran actions/setup-python and warmed an actions/cache of
+# pre-commit hooks. Both are gone: nothing in CI ever invokes pre-commit (it runs
+# from the git hook on developer machines, via mise.toml's `enter` hook), so the
+# cache warmed something that was never read and the Python install existed only
+# to serve it.
+name: prepare-ci-env
+description: Install mise and provision the CI tool set from mise.lock.
+
+runs:
+  using: composite
+  steps:
+    # Export MISE_ENV to the JOB, not just to this action's own steps.
+    #
+    # Without this, every later `mise x -- ...` in the job -- in components/
+    # restore and save, in build/podman-gnu, in the melange build steps -- runs
+    # against the full mise.toml instead of mise.ci.toml. With auto_install on,
+    # mise then provisions the host-dev-only tools too, so each job installs both
+    # Rust toolchains and cargo-binstall. That is slow, and it also *fails*:
+    # rust-nightly sets the default toolchain first, after which core:rust@latest
+    # exits non-zero from rustup-init.
+    #
+    # Found by running the component job under act, where it broke the very first
+    # build. ci.yaml happened to be immune because it sets MISE_ENV at workflow
+    # level; nothing else did.
+    - name: Select the CI tool set for the whole job
+      shell: bash
+      run: echo "MISE_ENV=ci" >> "${GITHUB_ENV}"
+
+    - name: Install `mise` and the locked tool set
+      uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea  # v4
+      with:
+        # Do not load mise.toml's [env] into GITHUB_ENV; only tools are wanted.
+        env: false
+        install: true
+        cache: true
+      env:
+        MISE_ENV: ci
+
+    - name: Assert the tool set resolved from the lockfile
+      shell: bash
+      env:
+        MISE_ENV: ci
+      run: |
+        set -euo pipefail
+
+        # --locked fails if any enabled tool lacks a pre-resolved URL and
+        # checksum for this platform in mise.lock. Without it a lockfile miss
+        # degrades silently into an unpinned download, which is precisely what
+        # this action exists to prevent.
+        mise install --locked
+
+        echo "::group::provisioned tools"
+        mise ls --current
+        echo "::endgroup::"

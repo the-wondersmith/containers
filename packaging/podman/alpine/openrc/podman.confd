@@ -1,0 +1,12 @@
+# Configuration for /etc/init.d/podman
+#
+# See podman-system-service(1) for the service description and options.
+#podman_opts="--time 0"
+
+# API endpoint in URI form. Leave empty to use the default
+# (unix:///run/podman/podman.sock for the rootful service).
+#podman_uri=""
+
+# Set to root for the rootful service; any other user runs it rootless.
+# Rootless additionally needs /etc/subuid and /etc/subgid entries for that user.
+#podman_user="root"

@@ -1,0 +1,290 @@
+---
+# The shipped Alpine package: one self-contained podman bundle.
+#
+# This definition compiles nothing. Every binary was already built by the
+# per-component definitions alongside it, cached in GHCR, and shared verbatim
+# with the Debian package. Here they are merely unpacked into a single payload.
+#
+# `version` and `epoch` below are placeholders: the bundle job in
+# build-podman-packages.yaml rewrites both in place before building, `version`
+# from the resolved component set and `epoch` from the pkgrel that release.yaml
+# derives. pkgrel resets to 1 when podman's own version changes and otherwise
+# increments, so a release driven purely by a buildah or netavark bump still
+# produces a distinguishable package. The committed pair is therefore only ever
+# used by a local `mise run build`, and `epoch` is held at that floor of 1 rather
+# than 0 so a local build names its output the way a release does.
+#
+# The component .apk files and the containers.conf.d fragment are staged into
+# .melange-src by that same job and read via `melange build --source-dir`.
+package:
+  name: podman
+  version: 6.0.2
+  epoch: 1
+  description: Self-contained Podman bundle (netavark, aardvark-dns, catatonit, buildah CLI)
+  url: https://podman.io
+  copyright:
+    - license: Apache-2.0
+  dependencies:
+    # catatonit, netavark, aardvark-dns and buildah are deliberately absent:
+    # they are bundled under /usr/libexec/podman (and /usr/bin/buildah) rather
+    # than depended upon.
+    #
+    # passt supplies pasta for rootless networking; slirp4netns was removed in
+    # podman 6.0. nftables is mandatory because netavark 2.0 deleted all
+    # iptables support. shadow-uidmap supplies newuidmap/newgidmap.
+    runtime:
+      # ca-certificates-bundle is listed explicitly even though it currently
+      # arrives transitively: without a trust store podman cannot pull from any
+      # HTTPS registry, and that should not depend on another package's
+      # dependency graph staying the same. The Debian side depends on
+      # ca-certificates for the same reason.
+      - ca-certificates-bundle
+      - conmon
+      - containers-common
+      - crun
+      - nftables
+      - passt
+      - shadow-uidmap
+    # Versioned, so another package's versioned dependency on any bundled
+    # component is satisfied by installing this one.
+    provides:
+      - aardvark-dns=2.0.0
+      - buildah=1.45.0
+      - catatonit=0.2.1
+      - netavark=2.0.0
+    replaces:
+      - aardvark-dns
+      - buildah
+      - catatonit
+      - netavark
+      # Alpine splits its podman init script into a podman-openrc subpackage.
+      # This bundle ships /etc/init.d/podman itself, so it has to replace and
+      # provide that name too or the two collide on the same path.
+      - podman-openrc
+    # Win over any separately packaged netavark/aardvark-dns/catatonit/buildah.
+    provider-priority: "100"
+
+  # OpenRC has no socket activation, so the services installed below are plain
+  # supervised daemons. They are added to the default runlevel here to match the
+  # Debian package, where podman.socket and the netavark DHCP proxy ship enabled.
+  #
+  # `rc-update add` is idempotent, and it is skipped entirely when rc-update is
+  # absent -- which is the case inside a container image build, where there is no
+  # runlevel to add anything to.
+  scriptlets:
+    post-install: |
+      #!/bin/sh
+      set -eu
+
+      if ! command -v rc-update > /dev/null 2>&1; then
+        echo "* rc-update not found (not an OpenRC system); skipping service enablement"
+        exit 0
+      fi
+
+      # nftables is a hard dependency of this package, so the nftables reload
+      # watcher always applies and is enabled unconditionally alongside the API
+      # service and the DHCP proxy.
+      for service in podman netavark-dhcp-proxy netavark-nftables-reload; do
+        rc-update add "${service}" default > /dev/null 2>&1 \
+          && echo "* enabled ${service} in the default runlevel" \
+          || echo "* could not enable ${service}; add it manually with 'rc-update add ${service} default'"
+      done
+
+      # netavark-firewalld-reload is a D-Bus listener on firewalld's "Reloaded"
+      # signal. Enabling it without firewalld would leave supervise-daemon
+      # restarting a process that exits immediately, so it is gated on firewalld
+      # actually being installed -- the same coupling the systemd unit gets from
+      # WantedBy=firewalld.service.
+      if rc-service --exists firewalld > /dev/null 2>&1; then
+        rc-update add netavark-firewalld-reload default > /dev/null 2>&1 \
+          && echo "* enabled netavark-firewalld-reload (firewalld detected)" \
+          || echo "* could not enable netavark-firewalld-reload"
+      else
+        echo "* firewalld not installed; leaving netavark-firewalld-reload disabled"
+      fi
+
+      cat >&2 <<'NOTICE'
+      *
+      * Enabled in the default runlevel: podman (API service),
+      * netavark-dhcp-proxy, netavark-nftables-reload.
+      *
+      * Start them now with:
+      *     rc-service cgroups start
+      *     rc-service podman start
+      *     rc-service netavark-nftables-reload start
+      *
+      * netavark-nftables-reload watches for an external nftables flush and
+      * reapplies netavark's rules; without it, container networking stops
+      * working after 'rc-service nftables restart'.
+      *
+      * Rootless operation additionally needs /etc/subuid and /etc/subgid
+      * entries for the user in question.
+      *
+      NOTICE
+
+environment:
+  contents:
+    keyring:
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616a9724.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
+      - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
+    repositories:
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+    packages:
+      # binutils supplies readelf for the static-linkage assertion below. Without
+      # it that check silently inspects nothing and passes -- the component
+      # definitions get readelf via build-base, but this one compiles nothing and
+      # would otherwise have no toolchain at all.
+      - binutils
+      - busybox
+      - tar
+
+pipeline:
+  - name: Unpack the prebuilt components
+    runs: |
+      set -eu
+
+      if ! ls components/*.apk > /dev/null 2>&1; then
+        echo "no component .apk files in the workspace; was --source-dir passed?" >&2
+        exit 1
+      fi
+
+      for apk in components/*.apk; do
+        echo "unpacking ${apk}"
+        # apk archives are concatenated gzip streams; GNU tar handles that.
+        # The apk control entries are dropped -- this package gets its own,
+        # generated by melange. The per-component SPDX documents under
+        # var/lib/db/sbom/ are deliberately kept, so the bundle carries an
+        # SBOM for every upstream project inside it.
+        tar -xzf "${apk}" -C "${{targets.destdir}}" \
+          --exclude='.PKGINFO' \
+          --exclude='.melange.yaml' \
+          --exclude='.SIGN.*'
+      done
+
+  - name: Drop systemd units
+    runs: |
+      # Alpine is OpenRC; systemd units are inert here. They are still built
+      # into the netavark component because that component is shared
+      # byte-for-byte with the Debian package, which does need them
+      # (netavark-nftables-reload in particular). Strip them at assembly time
+      # rather than diverging the component per distro.
+      rm -rf "${{targets.destdir}}/usr/lib/systemd"
+
+  - name: Install the configuration fragments
+    runs: |
+      install -Dm644 alpine/50-bundled-helpers.conf \
+        "${{targets.destdir}}/usr/share/containers/containers.conf.d/50-bundled-helpers.conf"
+
+      # Restores rootless storage defaults that Alpine's containers-common
+      # overrides; see the file's own header. Shipped under /usr/share rather
+      # than /etc so it is a package default the admin can override, and only on
+      # Alpine -- Debian does not have the problem.
+      install -Dm644 alpine/50-rootless-storage.conf \
+        "${{targets.destdir}}/usr/share/containers/storage.conf.d/50-rootless-storage.conf"
+
+  - name: Install the OpenRC services
+    runs: |
+      set -eu
+
+      # The systemd units stripped above have no meaning on Alpine. These are
+      # the equivalents, one per unit:
+      #
+      #   podman                      <- podman.socket. OpenRC has no socket
+      #                                  activation, so `podman system service`
+      #                                  runs supervised instead.
+      #   netavark-dhcp-proxy         <- netavark-dhcp-proxy.{socket,service}
+      #   netavark-firewalld-reload   <- netavark-firewalld-reload.service. Ports
+      #                                  directly: its trigger is a D-Bus signal,
+      #                                  which owes nothing to systemd.
+      #   netavark-nftables-reload    <- netavark-nftables-reload.service. Does
+      #                                  NOT port directly -- nf_tables notifies
+      #                                  over netlink and netavark ships no
+      #                                  watcher -- so this supervises our own
+      #                                  `nft monitor tables` watcher instead.
+      for service in podman netavark-dhcp-proxy netavark-firewalld-reload \
+        netavark-nftables-reload; do
+        install -Dm755 "alpine/openrc/${service}.initd" \
+          "${{targets.destdir}}/etc/init.d/${service}"
+        install -Dm644 "alpine/openrc/${service}.confd" \
+          "${{targets.destdir}}/etc/conf.d/${service}"
+      done
+
+      install -Dm755 alpine/netavark-nftables-monitor \
+        "${{targets.destdir}}/usr/libexec/podman/netavark-nftables-monitor"
+
+  - name: Verify the payload is complete and static
+    runs: |
+      set -eu
+      rc=0
+      dest="${{targets.destdir}}"
+
+      for f in \
+        usr/bin/podman \
+        usr/bin/buildah \
+        usr/libexec/podman/netavark \
+        usr/libexec/podman/aardvark-dns \
+        usr/libexec/podman/catatonit \
+        usr/libexec/podman/rootlessport \
+        usr/libexec/podman/quadlet \
+        usr/share/containers/containers.conf.d/50-bundled-helpers.conf \
+        usr/share/containers/storage.conf.d/50-rootless-storage.conf \
+        etc/init.d/podman \
+        etc/conf.d/podman \
+        etc/init.d/netavark-dhcp-proxy \
+        etc/conf.d/netavark-dhcp-proxy \
+        etc/init.d/netavark-firewalld-reload \
+        etc/conf.d/netavark-firewalld-reload \
+        etc/init.d/netavark-nftables-reload \
+        etc/conf.d/netavark-nftables-reload \
+        usr/libexec/podman/netavark-nftables-monitor; do
+        if [ ! -e "${dest}/${f}" ]; then
+          echo "MISSING: ${f}" >&2
+          rc=1
+        else
+          echo "OK: ${f}"
+        fi
+      done
+
+      # Nothing in an Alpine bundle may be dynamically linked: every component is
+      # a static musl build, and a stray NEEDED entry means a component was
+      # rebuilt with the wrong recipe.
+      #
+      # Fail closed on a missing readelf. Written the naive way this check
+      # swallows "readelf: not found" into the 2>/dev/null, finds no NEEDED
+      # lines, and cheerfully declares every binary static without having looked
+      # at one.
+      if ! command -v readelf > /dev/null 2>&1; then
+        echo "readelf not found; cannot verify static linkage" >&2
+        exit 1
+      fi
+
+      checked=0
+
+      for bin in \
+        "${dest}"/usr/bin/podman \
+        "${dest}"/usr/bin/buildah \
+        "${dest}"/usr/libexec/podman/*; do
+        [ -f "${bin}" ] || continue
+        # Skip non-ELF payload (the nftables watcher is a shell script).
+        readelf -d "${bin}" > /dev/null 2>&1 || continue
+        checked=$((checked + 1))
+
+        if readelf -d "${bin}" 2> /dev/null | grep -q 'NEEDED'; then
+          echo "FAIL: ${bin} is dynamically linked" >&2
+          readelf -d "${bin}" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/  needs \1/p' >&2
+          rc=1
+        fi
+      done
+
+      if [ "${checked}" -eq 0 ]; then
+        echo "FAIL: static-linkage check inspected 0 binaries" >&2
+        rc=1
+      else
+        echo "OK: ${checked} binaries checked, all static"
+      fi
+
+      exit "${rc}"

@@ -1,0 +1,249 @@
+---
+name: Promote Prerelease
+
+# Second half of the major-bump lane.
+#
+# A major bump is published as a prerelease and not dispatched to the APT
+# control plane. This workflow promotes it to a full release once it has soaked,
+# provided the acceptance suite still passes against the *published* assets and
+# nobody has filed an issue naming the tag.
+#
+# The happy path has no human in it. The unhappy path stops and stays visible.
+
+on:
+  schedule:
+    # Weekly, one hour after the upstream watcher, so a freshly published
+    # prerelease is never evaluated in the same hour it was created.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Promote this specific tag, ignoring the soak window. Leave empty to
+          evaluate every prerelease normally.
+
+permissions:
+  contents: read
+
+env:
+  # Days a prerelease must age before it is eligible for promotion.
+  SOAK_DAYS: "7"
+
+jobs:
+  find:
+    name: Find promotable prereleases
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      found: ${{ steps.pick.outputs.found }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # Nothing here pushes with git; do not leave the token on disk.
+          persist-credentials: false
+
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+        with:
+          allow-dependabot: "false"
+
+      - name: Provision the tool set
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Pick the oldest eligible prerelease
+        id: pick
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${FORCED_TAG}" ]]; then
+            echo "::notice::promotion forced for ${FORCED_TAG}"
+            {
+              echo "found=true"
+              echo "tag=${FORCED_TAG}"
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          cutoff="$(date -u -d "-${SOAK_DAYS} days" +%s)"
+
+          # Oldest first: if two prereleases are both eligible, promoting them in
+          # publication order keeps pkgrel monotonic.
+          candidates="$(
+            gh release list --repo "${GITHUB_REPOSITORY}" \
+              --limit 50 --json tagName,isPrerelease,publishedAt \
+              --jq '[.[] | select(.isPrerelease)] | sort_by(.publishedAt) | .[]'
+          )"
+
+          if [[ -z "${candidates}" ]]; then
+            echo "::notice::no prereleases outstanding"
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          while IFS= read -r candidate; do
+            [[ -n "${candidate}" ]] || continue
+
+            tag="$(jq -r '.tagName' <<< "${candidate}")"
+            published="$(date -u -d "$(jq -r '.publishedAt' <<< "${candidate}")" +%s)"
+
+            if [[ "${published}" -gt "${cutoff}" ]]; then
+              age_days=$(( ( $(date -u +%s) - published ) / 86400 ))
+              echo "::notice::${tag} is ${age_days}d old; still soaking (needs ${SOAK_DAYS}d)"
+              continue
+            fi
+
+            # An open issue naming the tag is an explicit hold.
+            blocking="$(
+              gh issue list --repo "${GITHUB_REPOSITORY}" \
+                --state open --search "${tag} in:title" \
+                --json number --jq 'length'
+            )"
+
+            if [[ "${blocking}" -gt 0 ]]; then
+              echo "::warning::${tag} has ${blocking} open issue(s) naming it; holding"
+              continue
+            fi
+
+            echo "::notice::${tag} is eligible for promotion"
+            {
+              echo "found=true"
+              echo "tag=${tag}"
+            } >> "${GITHUB_OUTPUT}"
+            exit 0
+          done <<< "${candidates}"
+
+          echo "::notice::no prerelease is eligible yet"
+          echo "found=false" >> "${GITHUB_OUTPUT}"
+
+  verify:
+    name: Re-verify ${{ needs.find.outputs.tag }}
+    runs-on: ${{ matrix.runner }}
+    needs: find
+    if: needs.find.outputs.found == 'true'
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - distro: debian
+            pattern: '*.deb'
+            image: debian:trixie
+            runner: ubuntu-latest
+          - distro: alpine
+            pattern: '*.apk'
+            image: alpine:3.23
+            runner: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      - name: Provision the tool set
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Download the published assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.find.outputs.tag }}
+          PATTERN: ${{ matrix.pattern }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p pkg
+          # amd64 only: this is a regression check on the exact bytes that were
+          # published, not a fresh matrix build.
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${PATTERN}" --dir pkg
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern manifest.json --dir .
+
+          # Keep only the host architecture's package.
+          find pkg -type f \( -name '*arm64*' -o -name '*aarch64*' \) -delete
+
+          ls -la pkg
+
+      - name: Re-run the acceptance suite against the published package
+        shell: bash
+        env:
+          IMAGE: ${{ matrix.image }}
+          DISTRO: ${{ matrix.distro }}
+        run: |
+          set -euo pipefail
+
+          components="$(jq -c '.components' manifest.json)"
+
+          # See test-podman-packages.yaml for why /var/lib/containers and
+          # /var/tmp must be anonymous volumes rather than the container's own
+          # overlayfs.
+          docker run --rm --privileged --cgroupns=host \
+            -v /var/lib/containers \
+            -v /var/tmp \
+            -v /home \
+            -v "${PWD}/pkg:/pkg:ro" \
+            -v "${PWD}/.github/scripts:/scripts:ro" \
+            -e "DISTRO=${DISTRO}" \
+            -e "COMPONENTS=${components}" \
+            "${IMAGE}" \
+            /bin/sh /scripts/acceptance.sh
+
+  promote:
+    name: Promote ${{ needs.find.outputs.tag }} to stable
+    runs-on: ubuntu-latest
+    needs:
+      - find
+      - verify
+    if: needs.find.outputs.found == 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git, and several go on to build
+          # untrusted upstream source as root. Leaving the token in
+          # .git/config gives that code something to read.
+          persist-credentials: false
+
+      - name: Provision the tool set
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Clear the prerelease flag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.find.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --prerelease=false --latest
+          echo "::notice::${TAG} promoted to stable"
+
+      # Editing a release with the default token fires `release: released`, not
+      # `release: published`, and GitHub suppresses events from the default token
+      # regardless -- so publish-apt-packages.yaml will not run. Dispatch here.
+      - name: Notify the APT control plane
+        uses: ./.github/actions/apt-dispatch
+        with:
+          tag: ${{ needs.find.outputs.tag }}
+          token: ${{ secrets.APT_DISPATCH_TOKEN }}

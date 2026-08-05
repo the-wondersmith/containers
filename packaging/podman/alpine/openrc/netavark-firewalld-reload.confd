@@ -1,0 +1,8 @@
+# Configuration for /etc/init.d/netavark-firewalld-reload
+#
+# Extra arguments for `netavark firewalld-reload`.
+#
+# This service is only meaningful when firewalld is installed and running. On a
+# host using nftables directly -- the common Alpine case -- leave it disabled;
+# it would exit immediately with no firewalld on the bus to listen to.
+#netavark_firewalld_reload_opts=""

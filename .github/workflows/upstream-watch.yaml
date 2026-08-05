@@ -1,0 +1,241 @@
+---
+name: Upstream Watch
+
+# The only thing that starts a release.
+#
+# Runs weekly, resolves the newest semver tag for every component, and diffs the
+# result against the manifest.json attached to the most recent release. That
+# manifest is the repository's entire persistent state -- there is no
+# versions.yaml, no bump commit, and no bump pull request.
+#
+# Classification decides the lane, not a human:
+#   * any component crossing a MAJOR version  -> prerelease, no APT dispatch,
+#     promoted only after the soak window in promote-prerelease.yaml;
+#   * anything else                           -> straight to a full release.
+#
+# Nothing is gated on approval. The acceptance suite in test-podman-packages.yaml
+# is what stands between an upstream tag and a published package, which is why
+# it tests behaviour (container-to-container DNS through netavark and
+# aardvark-dns) rather than file placement.
+
+on:
+  schedule:
+    # Weekly, Monday 08:00 UTC. Deliberately not daily: every run that finds a
+    # change spends real build minutes across four package/arch combinations,
+    # and upstream does not move fast enough for daily checks to buy anything.
+    - cron: '0 8 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Resolve upstream versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    outputs:
+      changed: ${{ steps.resolve.outputs.changed }}
+      major: ${{ steps.resolve.outputs.major }}
+      components: ${{ steps.resolve.outputs.components }}
+      summary: ${{ steps.resolve.outputs.summary }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # Nothing here pushes with git; do not leave the token on disk.
+          persist-credentials: false
+
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+        with:
+          allow-dependabot: "false"
+
+      - name: Provision the tool set
+        uses: ./.github/actions/prepare-ci-env
+
+      - name: Resolve and classify
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # component -> upstream repository. catatonit is the odd one out: it
+          # lives under openSUSE, not containers.
+          declare -A repos=(
+            [podman]=https://github.com/containers/podman.git
+            [netavark]=https://github.com/containers/netavark.git
+            [aardvark-dns]=https://github.com/containers/aardvark-dns.git
+            [buildah]=https://github.com/containers/buildah.git
+            [catatonit]=https://github.com/openSUSE/catatonit.git
+          )
+
+          # Newest x.y.z tag, ignoring release candidates and anything else that
+          # is not a plain three-part version.
+          latest_tag() {
+            git ls-remote --tags --refs "${1}" \
+              | awk '{print $2}' \
+              | sed 's|refs/tags/||' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -n1
+          }
+
+          previous="$(mktemp)"
+          if gh release download --repo "${GITHUB_REPOSITORY}" \
+            --pattern manifest.json --output "${previous}" 2> /dev/null; then
+            echo "::notice::comparing against $(jq -r '.tag' "${previous}")"
+          else
+            echo "::notice::no previous release; bootstrapping from upstream latest"
+            echo '{"components":{}}' > "${previous}"
+          fi
+
+          components='{}'
+          changed=false
+          major=false
+          summary=''
+
+          for component in podman netavark aardvark-dns buildah catatonit; do
+            repo="${repos[${component}]}"
+
+            tag="$(latest_tag "${repo}")"
+            if [[ -z "${tag}" ]]; then
+              echo "::error::could not resolve a version tag for ${component} from ${repo}"
+              exit 1
+            fi
+            version="${tag#v}"
+
+            # Peel the annotated tag to the commit it points at, so the build is
+            # pinned to a SHA rather than a mutable ref.
+            commit="$(git ls-remote "${repo}" "refs/tags/${tag}^{}" | awk '{print $1}')"
+            if [[ -z "${commit}" ]]; then
+              commit="$(git ls-remote "${repo}" "refs/tags/${tag}" | awk '{print $1}')"
+            fi
+            if [[ -z "${commit}" ]]; then
+              echo "::error::could not resolve a commit for ${component} ${tag}"
+              exit 1
+            fi
+
+            old_version="$(jq -r --arg c "${component}" \
+              '.components[$c].version // ""' "${previous}")"
+
+            if [[ "${old_version}" != "${version}" ]]; then
+              changed=true
+              summary+="- ${component}: ${old_version:-none} -> ${version}"$'\n'
+              echo "::notice::${component}: ${old_version:-none} -> ${version}"
+
+              # A bump is "major" only when there is something to compare
+              # against; a bootstrap run is not a major event.
+              if [[ -n "${old_version}" ]]; then
+                if [[ "${version%%.*}" != "${old_version%%.*}" ]]; then
+                  major=true
+                  echo "::warning::${component} crosses a major version"
+                fi
+              fi
+            fi
+
+            components="$(
+              jq -c --arg c "${component}" --arg v "${version}" --arg s "${commit}" \
+                '.[$c] = {version: $v, commit: $s}' <<< "${components}"
+            )"
+          done
+
+          if [[ "${changed}" == false ]]; then
+            echo "::notice::everything is up to date; nothing to build"
+            summary='no changes'
+          fi
+
+          {
+            echo "changed=${changed}"
+            echo "major=${major}"
+            echo "components=${components}"
+            echo "summary<<SUMMARY_EOF"
+            printf '%s' "${summary}"
+            echo
+            echo "SUMMARY_EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+          jq . <<< "${components}"
+
+  release:
+    name: Release
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    # Named explicitly, NOT `secrets: inherit`. A called workflow receives no
+    # secrets by default, and inherit would forward every secret this repository
+    # holds when release.yaml needs exactly one.
+    secrets:
+      APT_DISPATCH_TOKEN: ${{ secrets.APT_DISPATCH_TOKEN }}
+    uses: ./.github/workflows/release.yaml
+    with:
+      components: ${{ needs.detect.outputs.components }}
+      prerelease: ${{ needs.detect.outputs.major == 'true' }}
+      reason: >-
+        Scheduled upstream watch (${{ needs.detect.outputs.major == 'true'
+        && 'major bump, soaking as prerelease' || 'minor/patch' }})
+
+  # A major bump reaching the prerelease lane is worth a durable record: the
+  # notice in the run log disappears from view, an issue does not.
+  announce-major:
+    name: Open a tracking issue for the major bump
+    runs-on: ubuntu-latest
+    needs:
+      - detect
+      - release
+    if: needs.detect.outputs.major == 'true'
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: File or update the tracking issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUMMARY: ${{ needs.detect.outputs.summary }}
+        run: |
+          set -euo pipefail
+
+          title='Major upstream bump soaking as a prerelease'
+
+          # printf rather than a heredoc: a heredoc terminator has to sit at
+          # column 0, which would close the surrounding YAML block scalar.
+          body="$(
+            printf '%s\n' \
+              'A component crossed a major version, so the build was published' \
+              'as a prerelease rather than a full release, and was not' \
+              'dispatched to the APT control plane.' \
+              '' \
+              'It is promoted automatically once the soak window elapses,' \
+              'provided the acceptance suite still passes against the' \
+              'published assets.' \
+              '' \
+              'Closing this issue is acknowledgement only; it does not gate' \
+              'promotion. What *does* hold a promotion is an open issue whose' \
+              'title contains the prerelease tag itself.' \
+              ''
+            printf '%s\n' "${SUMMARY}"
+          )"
+
+          existing="$(
+            gh issue list --repo "${GITHUB_REPOSITORY}" \
+              --state open --search "${title} in:title" \
+              --json number --jq '.[0].number // ""'
+          )"
+
+          if [[ -n "${existing}" ]]; then
+            gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" --body "${body}" --label automated
+          fi
