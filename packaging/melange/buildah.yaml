@@ -73,6 +73,16 @@ pipeline:
       # go-md2man already installed in the build environment instead.
       make -C docs GOMD2MAN=go-md2man
 
+  - name: Strip
+    runs: |
+      # buildah is the second-largest binary in the payload and loses 31% to
+      # stripping -- 50.2 MB to 34.2 MB. See docs/build-model.md.
+      #
+      # Go tolerates this: strip removes DWARF and the symbol table but not the
+      # pclntab, so panic tracebacks stay symbolised, and not the dynamic
+      # section, so the assertion below still means what it says.
+      strip --strip-unneeded bin/buildah
+
   - name: Assert the binary is statically linked
     runs: |
       if readelf -d bin/buildah 2> /dev/null | grep -q 'NEEDED'; then

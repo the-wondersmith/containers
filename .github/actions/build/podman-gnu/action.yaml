@@ -153,6 +153,43 @@ runs:
           HELPER_BINARIES_DIR=/usr/libexec/podman \
           install.bin install.remote install.man install.completions install.systemd
 
+    - name: Strip the installed binaries
+      shell: bash
+      env:
+        DESTDIR: ${{ inputs.destdir }}
+      run: |
+        set -euo pipefail
+
+        # DWARF and symbol tables are 30% of the shipped payload -- measured on
+        # the v6.0.2-1 .deb, 142 MB of binaries becomes 99 MB, with podman itself
+        # losing 30%. That matters concretely: the .deb was 78 MiB against
+        # GitHub's 100 MiB per-file push limit, which the APT repository's pool
+        # branch had already started warning about.
+        #
+        # Stripping here rather than relying on dh_strip alone means the cached
+        # component and the build artifact shrink too, not just the final package.
+        #
+        # Go tolerates this: strip removes DWARF and the symbol table but leaves
+        # the pclntab, so panic tracebacks stay symbolised, and leaves the dynamic
+        # section, so the linkage allowlist assertion below is unaffected.
+        stripped=0
+
+        while IFS= read -r binary; do
+          # Only ELF objects; the payload also contains man pages, completions
+          # and unit files.
+          if readelf -h "${binary}" > /dev/null 2>&1; then
+            strip --strip-unneeded "${binary}"
+            stripped=$((stripped + 1))
+          fi
+        done < <(find "${DESTDIR}" -type f -perm -u+x)
+
+        if [[ "${stripped}" -eq 0 ]]; then
+          echo "::error::stripped 0 binaries; the staging tree looks wrong"
+          exit 1
+        fi
+
+        echo "stripped ${stripped} binaries"
+
     - name: Assert the linkage matches the allowlist
       shell: bash
       env:

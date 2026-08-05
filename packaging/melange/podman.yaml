@@ -99,6 +99,20 @@ pipeline:
         EXTRA_BUILDTAGS='containers_image_openpgp osusergo netgo' \
         EXTRA_LDFLAGS='-extldflags=-static'
 
+  - name: Strip
+    runs: |
+      # podman is the largest binary in the payload and loses 30% to stripping --
+      # 65.6 MB to 45.3 MB. rootlessport and quadlet lose 32% each. See
+      # docs/build-model.md for the full measurement.
+      #
+      # Go tolerates this: strip removes DWARF and the symbol table but not the
+      # pclntab, so panic tracebacks stay symbolised, and not the dynamic
+      # section, so the assertion below still means what it says.
+      for b in bin/podman bin/podman-remote bin/rootlessport bin/quadlet; do
+        [ -f "$b" ] || continue
+        strip --strip-unneeded "$b"
+      done
+
   - name: Assert every produced binary is statically linked
     runs: |
       rc=0

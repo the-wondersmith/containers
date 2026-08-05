@@ -28,6 +28,34 @@ pinned, just by different pinning mechanisms, and a version skew between them is
 `SOURCE_DATE_EPOCH` is pinned on both halves of the build, since podman otherwise bakes a timestamp into the binary and a content-addressed
 cache would be meaningless.
 
+## Everything is stripped
+
+Every bundled binary is stripped: each melange component strips its own output, and the glibc podman build strips its
+staging tree. `debian/rules` also runs `dh_strip --no-automatic-dbgsym` as a backstop, so a binary added to the payload
+later is stripped without anyone having to remember.
+
+Worth stating because the packaging previously disabled stripping on the grounds that it "buys very little" for Go
+binaries. Measured on the shipped `v6.0.2-1` `.deb`:
+
+| binary | before | stripped | |
+|---|---|---|---|
+| `podman` | 65.6 MB | 45.3 MB | −30% |
+| `buildah` | 50.2 MB | 34.2 MB | −31% |
+| `netavark` | 14.4 MB | 11.2 MB | −22% |
+| `rootlessport` | 5.0 MB | 3.4 MB | −32% |
+| `quadlet` | 3.7 MB | 2.5 MB | −32% |
+| `aardvark-dns` | 3.4 MB | 2.7 MB | −20% |
+| **total** | **142.2 MB** | **99.2 MB** | **−30%** |
+
+The consequence was concrete rather than aesthetic. At 78 MiB the `.deb` sat 22 MiB below GitHub's **100 MiB per-file push
+limit**, and `the-wondersmith/apt` commits packages to a git branch — its pushes had already begun emitting
+`GH001: Large files detected`. A package growing past 100 MiB would make that push fail outright and break publication.
+
+Stripping is safe for both toolchains and weakens nothing this repository asserts. It removes DWARF and the symbol table,
+but not Go's `pclntab`, so panic tracebacks stay symbolised; and not the ELF dynamic section, so the
+[linkage assertions](linkage.md) still mean what they say. The tradeoff accepted is that shipped binaries carry no debug
+symbols — normal for a distribution package, and why no `-dbgsym` package is produced.
+
 ## The build tags are the toolchain
 
 podman and buildah compute their build tags by *probing for headers* (`hack/systemd_tag.sh`, `hack/libsubid_tag.sh`,
