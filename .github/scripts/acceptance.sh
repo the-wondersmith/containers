@@ -287,7 +287,26 @@ else
   acc_uid="$(id -u acceptance)"
   install -d -o acceptance -g acceptance -m 700 "/run/user/${acc_uid}"
 
-  rootless_run="XDG_RUNTIME_DIR=/run/user/${acc_uid} podman run --rm --network bridge ${BUSYBOX_IMAGE} true"
+  # Two assertions, coarse then fine, so a failure localizes itself:
+  #
+  #   default networking -> pasta alone, which is podman 6's rootless default
+  #   --network bridge   -> a rootless netns plus pasta plus rootlessport, which
+  #                         additionally needs the uid/gid mapping to hold up
+  #
+  # Alpine currently fails the second while Debian passes both. Splitting them
+  # says whether the userns mapping is broken generally or only the rootless-netns
+  # path is, which the single combined assertion could not distinguish.
+  rootless_env="XDG_RUNTIME_DIR=/run/user/${acc_uid}"
+  rootless_plain="${rootless_env} podman run --rm ${BUSYBOX_IMAGE} true"
+
+  if su acceptance -s /bin/sh -c "${rootless_plain}" > /dev/null 2>&1; then
+    ok "rootless podman run, default networking (pasta)"
+  else
+    fail "rootless podman run, default networking (pasta)"
+    su acceptance -s /bin/sh -c "${rootless_plain}" 2>&1 | tail -20 >&2 || true
+  fi
+
+  rootless_run="${rootless_env} podman run --rm --network bridge ${BUSYBOX_IMAGE} true"
 
   if su acceptance -s /bin/sh -c "${rootless_run}" > /dev/null 2>&1; then
     ok "rootless podman run with bridge networking (pasta + rootlessport)"
@@ -296,10 +315,15 @@ else
     su acceptance -s /bin/sh -c "${rootless_run}" 2>&1 | tail -20 >&2 || true
 
     # podman reports pasta failures as `pasta failed with exit code 1:` with
-    # nothing after the colon, so the interesting output never reaches the log.
-    # Gather what actually determines whether pasta can work, and run it directly
-    # to get its own stderr.
-    echo "--- pasta diagnostics ---" >&2
+    # nothing after the colon, so pasta's own message only reaches the log via
+    # the re-run above. Record what determines whether the rootless path can
+    # work at all.
+    #
+    # Every command here MUST terminate on its own. An earlier version invoked
+    # bare `pasta` to capture its stderr, on the assumption that it would exit
+    # once it found no netns to attach to. It does not -- it keeps running, so
+    # the `| head` never saw EOF and the job hung until the six-hour timeout.
+    echo "--- rootless diagnostics ---" >&2
     echo "pasta: $(command -v pasta || echo '<not on PATH>')" >&2
     pasta --version 2>&1 | head -3 >&2 || true
     echo "/dev/net/tun: $(ls -l /dev/net/tun 2>&1)" >&2
@@ -307,11 +331,32 @@ else
     echo "max_user_namespaces: $(cat /proc/sys/user/max_user_namespaces 2>&1 || echo n/a)" >&2
     echo "subuid: $(grep acceptance /etc/subuid 2>&1)" >&2
     echo "subgid: $(grep acceptance /etc/subgid 2>&1)" >&2
-    echo "newuidmap: $(command -v newuidmap || echo '<missing>')" >&2
-    # pasta needs a target netns to attach to; without one it exits after
-    # printing why, which is exactly the message podman swallows.
-    su acceptance -s /bin/sh -c 'pasta --version > /dev/null 2>&1 && pasta 2>&1 | head -10' >&2 || true
-    echo "--- end pasta diagnostics ---" >&2
+
+    # Existence is not enough: newuidmap has to be *usable*. Debian ships it
+    # with file capabilities, Alpine setuid-root, and a nosuid mount or an
+    # overlay that drops capabilities breaks those two in different ways. If the
+    # mapping never gets established, pasta fails exactly as observed -- EACCES
+    # on a world-readable /proc/sys entry and on the runtime dir.
+    for helper in newuidmap newgidmap; do
+      path="$(command -v "${helper}" 2> /dev/null || true)"
+      if [ -n "${path}" ]; then
+        echo "${helper}: $(ls -l "${path}" 2>&1)" >&2
+        # getcap needs libcap, which neither base image is guaranteed to carry.
+        command -v getcap > /dev/null 2>&1 && getcap "${path}" >&2 || true
+      else
+        echo "${helper}: <missing>" >&2
+      fi
+    done
+
+    echo "mount options:" >&2
+    grep -E ' (/|/usr|/run) ' /proc/mounts >&2 || true
+
+    # Does the mapping work at all, independent of networking? This is the
+    # cheapest way to separate "userns is broken" from "pasta is broken".
+    echo "id inside a rootless userns:" >&2
+    su acceptance -s /bin/sh -c \
+      "XDG_RUNTIME_DIR=/run/user/${acc_uid} podman unshare id" 2>&1 | head -3 >&2 || true
+    echo "--- end rootless diagnostics ---" >&2
   fi
 fi
 endgroup
