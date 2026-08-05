@@ -44,7 +44,9 @@ case "${DISTRO}" in
     # binutils supplies readelf. The linkage assertions below are worthless
     # without it: `readelf ... 2>/dev/null | grep -q NEEDED` on a missing readelf
     # produces no output, which reads as "statically linked" for every binary.
-    apt-get install -y --no-install-recommends jq iproute2 binutils
+    # libcap2-bin supplies getcap, which the rootless baseline uses to report
+    # whether newuidmap's privileges actually made it into the image.
+    apt-get install -y --no-install-recommends jq iproute2 binutils libcap2-bin
     ;;
   alpine)
     # --allow-untrusted: the apk is built with no --signing-key, so it carries
@@ -54,7 +56,10 @@ case "${DISTRO}" in
     apk add --no-cache --allow-untrusted /pkg/*.apk
     # See the Debian branch: binutils supplies readelf, without which the
     # linkage assertions pass vacuously. busybox does not provide it.
-    apk add --no-cache jq iproute2 binutils
+    # libcap supplies getcap; see the Debian branch. It matters more here,
+    # because Alpine privileges newuidmap with a file capability rather than a
+    # setuid bit, so this is the only way to see whether it survived.
+    apk add --no-cache jq iproute2 binutils libcap
     ;;
   *)
     echo "unknown distro: ${DISTRO}" >&2
@@ -287,16 +292,67 @@ else
   acc_uid="$(id -u acceptance)"
   install -d -o acceptance -g acceptance -m 700 "/run/user/${acc_uid}"
 
+  rootless_env="XDG_RUNTIME_DIR=/run/user/${acc_uid}"
+
+  # ── Environment baseline, printed on BOTH distros, pass or fail ────────────
+  # Emitted unconditionally because the distro that works is the baseline the
+  # failing one has to be diffed against. An earlier version only printed this
+  # from the failure branch, so Debian -- the passing case -- said nothing.
+  echo "--- rootless environment (${DISTRO}) ---" >&2
+  echo "pasta: $(command -v pasta || echo '<not on PATH>')" >&2
+  pasta --version 2>&1 | head -2 >&2 || true
+  echo "/dev/net/tun: $(ls -l /dev/net/tun 2>&1)" >&2
+  echo "max_user_namespaces: $(cat /proc/sys/user/max_user_namespaces 2>&1 || echo n/a)" >&2
+  echo "subuid: $(grep acceptance /etc/subuid 2>&1)" >&2
+  echo "subgid: $(grep acceptance /etc/subgid 2>&1)" >&2
+  echo "XDG_RUNTIME_DIR: $(ls -ld "/run/user/${acc_uid}" 2>&1)" >&2
+
+  # The two distros privilege newuidmap by DIFFERENT mechanisms, which is the
+  # asymmetry that matters and the reason "both packages declare the dependency"
+  # does not imply equivalent behaviour:
+  #
+  #   Debian  uidmap         -rwsr-xr-x, setuid root, no capabilities
+  #   Alpine  shadow-subids  -rwxr-xr-x plus cap_setuid=ep / cap_setgid=ep
+  #
+  # A setuid bit survives anything. A file capability lives in the
+  # security.capability xattr and is lost if an image layer or filesystem does
+  # not carry it. So this has to be observed rather than assumed.
+  #
+  # getcap is invoked directly, not guarded by `command -v`. Guarding it meant a
+  # missing libcap silently skipped the check, and the resulting silence was
+  # misread as "no capabilities set" -- the wrong conclusion, from a check that
+  # never ran.
+  for helper in newuidmap newgidmap; do
+    helper_path="$(command -v "${helper}" 2> /dev/null || true)"
+    if [ -n "${helper_path}" ]; then
+      echo "${helper}: $(ls -l "${helper_path}" 2>&1)" >&2
+      echo "  caps: $(getcap "${helper_path}" 2>&1 || echo '<getcap unavailable>')" >&2
+    else
+      echo "${helper}: <missing>" >&2
+    fi
+  done
+
+  # The decisive check. A single line mapping only root means the subuid range
+  # never got mapped, which is a newuidmap problem. The full 65536 range means
+  # the mapping is fine and any pasta failure is something else entirely.
+  #
+  # An earlier version ran `id` here, which prints uid=0(root) in both cases and
+  # therefore could not tell them apart.
+  for map in uid_map gid_map; do
+    echo "${map} inside a rootless userns:" >&2
+    su acceptance -s /bin/sh -c \
+      "${rootless_env} podman unshare cat /proc/self/${map}" 2>&1 | head -5 >&2 || true
+  done
+  echo "--- end rootless environment ---" >&2
+
   # Two assertions, coarse then fine, so a failure localizes itself:
   #
   #   default networking -> pasta alone, which is podman 6's rootless default
   #   --network bridge   -> a rootless netns plus pasta plus rootlessport, which
   #                         additionally needs the uid/gid mapping to hold up
   #
-  # Alpine currently fails the second while Debian passes both. Splitting them
-  # says whether the userns mapping is broken generally or only the rootless-netns
-  # path is, which the single combined assertion could not distinguish.
-  rootless_env="XDG_RUNTIME_DIR=/run/user/${acc_uid}"
+  # Alpine currently fails both, which already rules out the rootless-netns path
+  # as the cause -- it is all rootless networking, not just the bridge case.
   rootless_plain="${rootless_env} podman run --rm ${BUSYBOX_IMAGE} true"
 
   if su acceptance -s /bin/sh -c "${rootless_plain}" > /dev/null 2>&1; then
@@ -314,49 +370,11 @@ else
     fail "rootless podman run with bridge networking"
     su acceptance -s /bin/sh -c "${rootless_run}" 2>&1 | tail -20 >&2 || true
 
-    # podman reports pasta failures as `pasta failed with exit code 1:` with
-    # nothing after the colon, so pasta's own message only reaches the log via
-    # the re-run above. Record what determines whether the rootless path can
-    # work at all.
-    #
-    # Every command here MUST terminate on its own. An earlier version invoked
-    # bare `pasta` to capture its stderr, on the assumption that it would exit
-    # once it found no netns to attach to. It does not -- it keeps running, so
-    # the `| head` never saw EOF and the job hung until the six-hour timeout.
-    echo "--- rootless diagnostics ---" >&2
-    echo "pasta: $(command -v pasta || echo '<not on PATH>')" >&2
-    pasta --version 2>&1 | head -3 >&2 || true
-    echo "/dev/net/tun: $(ls -l /dev/net/tun 2>&1)" >&2
-    echo "unprivileged_userns_clone: $(cat /proc/sys/kernel/unprivileged_userns_clone 2>&1 || echo n/a)" >&2
-    echo "max_user_namespaces: $(cat /proc/sys/user/max_user_namespaces 2>&1 || echo n/a)" >&2
-    echo "subuid: $(grep acceptance /etc/subuid 2>&1)" >&2
-    echo "subgid: $(grep acceptance /etc/subgid 2>&1)" >&2
-
-    # Existence is not enough: newuidmap has to be *usable*. Debian ships it
-    # with file capabilities, Alpine setuid-root, and a nosuid mount or an
-    # overlay that drops capabilities breaks those two in different ways. If the
-    # mapping never gets established, pasta fails exactly as observed -- EACCES
-    # on a world-readable /proc/sys entry and on the runtime dir.
-    for helper in newuidmap newgidmap; do
-      path="$(command -v "${helper}" 2> /dev/null || true)"
-      if [ -n "${path}" ]; then
-        echo "${helper}: $(ls -l "${path}" 2>&1)" >&2
-        # getcap needs libcap, which neither base image is guaranteed to carry.
-        command -v getcap > /dev/null 2>&1 && getcap "${path}" >&2 || true
-      else
-        echo "${helper}: <missing>" >&2
-      fi
-    done
-
+    # The environment baseline above already covers what determines whether the
+    # rootless path can work; only the mount options are specific to diagnosing
+    # a capability that went missing, so they are the one thing added here.
     echo "mount options:" >&2
     grep -E ' (/|/usr|/run) ' /proc/mounts >&2 || true
-
-    # Does the mapping work at all, independent of networking? This is the
-    # cheapest way to separate "userns is broken" from "pasta is broken".
-    echo "id inside a rootless userns:" >&2
-    su acceptance -s /bin/sh -c \
-      "XDG_RUNTIME_DIR=/run/user/${acc_uid} podman unshare id" 2>&1 | head -3 >&2 || true
-    echo "--- end rootless diagnostics ---" >&2
   fi
 fi
 endgroup
