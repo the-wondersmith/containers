@@ -23,6 +23,16 @@ The control that actually matters is the **SLSA build-provenance attestation**, 
 signer identity. The APT control plane verifies it before ingesting, so an artefact that was not built here is rejected at the door — the
 same mechanism `the-wondersmith/pve-modkit` relies on.
 
+Because this repository is **public**, those attestations are verifiable by anyone, with no token and no special plan:
+
+```sh
+gh attestation verify ./podman_6.0.2-1_amd64.deb --repo the-wondersmith/containers
+```
+
+That is load-bearing for the argument above. An unsigned artefact is only honest rather than negligent if the thing that replaces the
+signature is something a consumer can actually check — on a private repository, provenance attestation requires GitHub Advanced Security,
+and the story would be considerably weaker.
+
 ## Related
 
 - [Distribution](distribution.md) — where the attestation is produced and consumed
