@@ -17,6 +17,11 @@ env:
   MISE_ENV: ci
 
 jobs:
+  # NOTE: this job's `name` is a required status check in the `main-protected`
+  # ruleset, which matches on the literal string "Lint & test". Renaming it makes
+  # every pull request unmergeable -- and the symptom is a check that never
+  # reports rather than one that fails, which reads as a hung PR. Change the
+  # ruleset first.
   lint:
     name: Lint & test
     runs-on: ubuntu-latest
@@ -47,6 +52,10 @@ jobs:
   # Every melange definition is parsed and linted without running a build, so a
   # malformed component recipe fails on the pull request rather than at 08:00
   # on a Monday when the upstream watcher fires.
+  #
+  # NOTE: as with `lint` above, this job's `name` is a required status check in
+  # the `main-protected` ruleset ("Validate melange definitions"). Renaming it
+  # blocks every merge. Change the ruleset first.
   melange-definitions:
     name: Validate melange definitions
     runs-on: ubuntu-latest
@@ -59,6 +68,14 @@ jobs:
           # untrusted upstream source as root. Leaving the token in
           # .git/config gives that code something to read.
           persist-credentials: false
+
+      # Gated for the same reason the lint job is: prepare-ci-env provisions
+      # tooling from the pull request's own mise.ci.toml, so this job executes
+      # PR-controlled configuration. The repository requires approval for all
+      # external contributors, which stops an unapproved fork before the runner
+      # starts -- this is the defence-in-depth layer behind it.
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
 
       - name: Prepare CI environment
         uses: ./.github/actions/prepare-ci-env

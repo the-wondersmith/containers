@@ -18,6 +18,9 @@ workflow recursion. So dispatch has three callers rather than one:
 Ingest is idempotent on `(repo, tag)`, so a rare double-dispatch is harmless. All three funnel through the shared
 `.github/actions/apt-dispatch` composite, and `publish-apt-packages.yaml` additionally refuses to run for a prerelease.
 
+Because the repository is public, the control plane fetches release assets anonymously; the dispatch token authorises the *notification*,
+not the download.
+
 ## Why trixie, not bookworm
 
 The Debian package targets **trixie**, not bookworm. That is not a preference — bookworm cannot satisfy the runtime dependencies at all: it
