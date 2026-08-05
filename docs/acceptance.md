@@ -37,6 +37,31 @@ The suite is POSIX `sh` throughout, because on Alpine it runs under busybox `ash
 image rather than one tailored to the tests. It also applies no workarounds of its own — see
 [rootless storage](rootless-storage.md) — so a regression in a shipped config fragment fails the release rather than being masked.
 
+## Rootless is split by who owns the failure
+
+The rootless assertions are deliberately in two parts.
+
+**What this package owns** — the uid/gid mapping, the shipped
+[rootless-storage fragment](rootless-storage.md), and running a container as an unprivileged user — is asserted with
+`--network host`, which involves no pasta at all. That is a hard failure on both distros.
+
+**What the environment owns** is pasta. Alpine 3.23 ships pasta `2025_09_19` and rootless pasta does not work inside this
+harness; Debian's `2025_05_03` does. Everything else measured is identical between the two: `newuidmap` privileges
+(capabilities on Alpine, setuid-root on Debian, both effective), the full subuid range mapped, `/dev/net/tun`, the runtime
+directory mode, and the userns limits. pasta fails within a millisecond of starting, with `EACCES` on
+`/proc/sys/net/ipv4/ip_local_port_range` and on the netns path.
+
+This was confirmed not to be a packaging problem by installing **Alpine's own podman 5.7.0** into the same privileged
+container, where it fails the same way. Nothing in this package is involved in the difference.
+
+So a pasta failure matching that exact signature is recorded as `KNOWN-FAIL` with a workflow warning rather than blocking
+the release. **Any other failure still fails**, and host networking cannot produce that signature, so the tolerance cannot
+mask a regression in the part the package is responsible for. Skipping the assertion outright would have hidden real
+regressions too, which is the opposite of what this suite exists for.
+
+Once Alpine's pasta works in a nested container — or the suite gains a non-containerised Alpine target — the tolerance
+should be deleted and the assertion made hard again.
+
 ## Fail closed, not open
 
 Several of these assertions are the kind that pass vacuously when their tooling is missing, and each is guarded:
