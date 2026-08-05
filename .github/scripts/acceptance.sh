@@ -204,13 +204,39 @@ if podman network create acceptance-net > /dev/null 2>&1; then
   # Give aardvark-dns a moment to publish the record.
   sleep 3
 
-  if podman run --rm --network acceptance-net "${BUSYBOX_IMAGE}" \
-    nslookup acceptance-target > /dev/null 2>&1; then
-    ok "container-to-container DNS via aardvark-dns"
+  # Query the FULLY-QUALIFIED name, and assert the answer is the target's real
+  # address rather than trusting nslookup's exit status.
+  #
+  # A bare name walks the container's search list. On a cloud runner that list
+  # inherits the host's own search domain, so busybox also queries
+  # acceptance-target.<runner-domain>, gets NXDOMAIN, and exits non-zero -- even
+  # though acceptance-target.dns.podman resolved correctly. That produced a false
+  # negative on the one test guarding against an incompatible netavark or
+  # aardvark-dns bump, and since acceptance is the only gate on a release, it
+  # would have blocked every release rather than just looking flaky.
+  #
+  # Comparing against the address from `podman inspect` also makes this a real
+  # assertion: aardvark-dns has to return the *right* record, not merely answer.
+  target_ip="$(
+    podman inspect -f \
+      '{{ (index .NetworkSettings.Networks "acceptance-net").IPAddress }}' \
+      acceptance-target 2> /dev/null
+  )"
+
+  if [ -z "${target_ip}" ]; then
+    # Distinguish "the target never got an address" from a DNS fault; otherwise
+    # a container that failed to start reads as an aardvark-dns regression.
+    fail "container-to-container DNS: target has no address on acceptance-net"
+    podman inspect acceptance-target 2>&1 | tail -20 >&2 || true
+  elif dns_out="$(
+    podman run --rm --network acceptance-net "${BUSYBOX_IMAGE}" \
+      nslookup acceptance-target.dns.podman 2>&1
+  )" && printf '%s' "${dns_out}" | grep -qF "${target_ip}"; then
+    # -F, not a regex: an address's dots would otherwise match any character.
+    ok "container-to-container DNS via aardvark-dns (${target_ip})"
   else
     fail "container-to-container DNS via aardvark-dns"
-    podman run --rm --network acceptance-net "${BUSYBOX_IMAGE}" \
-      nslookup acceptance-target 2>&1 | tail -10 >&2 || true
+    printf '%s\n' "${dns_out}" | tail -10 >&2
   fi
 
   podman rm -f acceptance-target > /dev/null 2>&1 || true
@@ -268,6 +294,24 @@ else
   else
     fail "rootless podman run with bridge networking"
     su acceptance -s /bin/sh -c "${rootless_run}" 2>&1 | tail -20 >&2 || true
+
+    # podman reports pasta failures as `pasta failed with exit code 1:` with
+    # nothing after the colon, so the interesting output never reaches the log.
+    # Gather what actually determines whether pasta can work, and run it directly
+    # to get its own stderr.
+    echo "--- pasta diagnostics ---" >&2
+    echo "pasta: $(command -v pasta || echo '<not on PATH>')" >&2
+    pasta --version 2>&1 | head -3 >&2 || true
+    echo "/dev/net/tun: $(ls -l /dev/net/tun 2>&1)" >&2
+    echo "unprivileged_userns_clone: $(cat /proc/sys/kernel/unprivileged_userns_clone 2>&1 || echo n/a)" >&2
+    echo "max_user_namespaces: $(cat /proc/sys/user/max_user_namespaces 2>&1 || echo n/a)" >&2
+    echo "subuid: $(grep acceptance /etc/subuid 2>&1)" >&2
+    echo "subgid: $(grep acceptance /etc/subgid 2>&1)" >&2
+    echo "newuidmap: $(command -v newuidmap || echo '<missing>')" >&2
+    # pasta needs a target netns to attach to; without one it exits after
+    # printing why, which is exactly the message podman swallows.
+    su acceptance -s /bin/sh -c 'pasta --version > /dev/null 2>&1 && pasta 2>&1 | head -10' >&2 || true
+    echo "--- end pasta diagnostics ---" >&2
   fi
 fi
 endgroup
