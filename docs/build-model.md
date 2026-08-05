@@ -11,6 +11,13 @@ the APKBUILD with one declarative definition, pins the build environment in the 
 plus SLSA provenance. Each `.apk` carries an SBOM at `var/lib/db/sbom/`, and the bundle retains every component's — which matters for a
 package whose entire premise is bundling upstream projects you cannot see from the metadata.
 
+The bundle keeps those component documents at **`usr/share/doc/podman/sbom/`** rather than at the canonical path, leaving
+`var/lib/db/sbom/` to melange for the bundle's own SBOM. That is not cosmetic: melange writes its SBOM host-side after the build guest
+exits, as the user that invoked it, and the component files unpacked into the payload are root-owned. Leaving them in place makes that write
+fail with `permission denied` on native Linux bind mounts — though not on Docker Desktop, which remaps ownership, so the failure appears only
+in CI. The bundle definition asserts both halves afterwards: that the component SBOMs are present at the new path, and that the old one is
+absent.
+
 ## Two Go toolchains, deliberately
 
 The two halves of the build get Go from different places, deliberately. The musl components take Alpine 3.23's `go` from inside melange's
