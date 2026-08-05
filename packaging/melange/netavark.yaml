@@ -91,6 +91,18 @@ pipeline:
 
       make docs
 
+  - name: Strip
+    runs: |
+      # Measured on the shipped .deb: DWARF and symbol tables are 30% of the
+      # payload -- 142 MB of binaries becomes 99 MB. netavark alone drops 22%.
+      # See docs/build-model.md; `debian/rules` previously asserted stripping
+      # "buys very little", which was wrong by an order of magnitude.
+      #
+      # Safe for a static binary: strip removes DWARF and the symbol table but
+      # leaves the dynamic section, so the linkage assertion below still means
+      # what it says.
+      strip --strip-unneeded bin/netavark
+
   - name: Assert the binary is statically linked
     runs: |
       if readelf -d bin/netavark 2> /dev/null | grep -q 'NEEDED'; then

@@ -55,6 +55,13 @@ pipeline:
       ./configure
       make
 
+  - name: Strip
+    runs: |
+      # Marginal here -- catatonit is ~30 KB against a 140 MB payload -- but
+      # applied for consistency, so "every bundled binary is stripped" is a rule
+      # rather than a list of exceptions. See docs/build-model.md.
+      strip --strip-unneeded catatonit
+
   - name: Assert the binary is statically linked
     runs: |
       if readelf -d catatonit 2> /dev/null | grep -q 'NEEDED'; then

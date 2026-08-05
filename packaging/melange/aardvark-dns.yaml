@@ -50,6 +50,13 @@ pipeline:
 
       install -Dm755 "targets/${host_triple}/release/aardvark-dns" bin/aardvark-dns
 
+  - name: Strip
+    runs: |
+      # See netavark.yaml and docs/build-model.md: symbols and DWARF are 30% of
+      # the shipped payload. The dynamic section survives, so the assertion below
+      # is unaffected.
+      strip --strip-unneeded bin/aardvark-dns
+
   - name: Assert the binary is statically linked
     runs: |
       if readelf -d bin/aardvark-dns 2> /dev/null | grep -q 'NEEDED'; then
