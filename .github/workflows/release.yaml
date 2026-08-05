@@ -157,6 +157,12 @@ jobs:
       - build
     permissions:
       contents: read
+      # The called workflow resolves its artifacts through the API so that a
+      # dispatch can point at an earlier build. That path needs `actions: read`
+      # even when the run it names is the current one, and a reusable workflow
+      # cannot grant itself more than its caller allows -- without this the
+      # download 403s here while working fine on a manual dispatch.
+      actions: read
     uses: ./.github/workflows/test-podman-packages.yaml
     with:
       components: ${{ inputs.components }}

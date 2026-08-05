@@ -22,9 +22,34 @@ on:
         required: true
         type: string
         description: JSON object mapping each component to its version and commit.
+      run-id:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Run to take the package artifacts from. Empty means this run, which is
+          the case when release.yaml calls this after building in the same run.
+  # Dispatchable so the suite can be run against an existing build without a
+  # release. It is the only gate on an unattended publish, so being unable to
+  # exercise it on demand meant it could not be verified before it mattered.
+  workflow_dispatch:
+    inputs:
+      components:
+        required: true
+        type: string
+        description: JSON object mapping each component to its version and commit.
+      run-id:
+        required: true
+        type: string
+        description: >-
+          Run ID of the build-podman-packages run holding the .deb/.apk
+          artifacts to test.
 
 permissions:
   contents: read
+  # Reading artifacts from another run requires this; download-artifact only
+  # needs the implicit scope when the artifacts belong to the current run.
+  actions: read
 
 jobs:
   acceptance:
@@ -65,11 +90,22 @@ jobs:
           # .git/config gives that code something to read.
           persist-credentials: false
 
+      # Authorize before pulling an arbitrary run's artifacts and executing the
+      # package inside a privileged container. This workflow is dispatchable, so
+      # it is an entry point in its own right rather than only ever reached
+      # through release.yaml's gate.
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+
       - name: Download the package under test
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
         with:
           name: ${{ matrix.artifact }}
           path: pkg
+          # Defaults to this run, which is what release.yaml wants: it builds and
+          # tests in one run. A dispatch names an earlier build instead.
+          run-id: ${{ inputs.run-id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Run the acceptance suite
         shell: bash
