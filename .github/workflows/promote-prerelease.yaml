@@ -128,7 +128,7 @@ jobs:
           echo "found=false" >> "${GITHUB_OUTPUT}"
 
   verify:
-    name: Re-verify ${{ needs.find.outputs.tag }}
+    name: Re-verify ${{ needs.find.outputs.tag }} / ${{ matrix.distro }} / ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     needs: find
     if: needs.find.outputs.found == 'true'
@@ -138,15 +138,39 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
+        # Both architectures, each on a native runner.
+        #
+        # This previously listed two entries, both on ubuntu-latest, and then
+        # deleted every *arm64*/*aarch64* asset after download -- so promotion
+        # re-verified amd64 and x86_64 only. The arm64 packages were promoted to
+        # stable, and dispatched to the APT repository, on the strength of a
+        # pre-publication test alone. Half the published artefacts were never
+        # re-checked against the bytes actually served.
+        #
+        # The patterns are arch-specific now, which is only possible because the
+        # .apk assets carry their architecture in the name -- before that fix the
+        # two arches shared one filename and could not be told apart here.
         include:
           - distro: debian
-            pattern: '*.deb'
+            arch: amd64
+            pattern: '*_amd64.deb'
             image: debian:trixie
             runner: ubuntu-latest
+          - distro: debian
+            arch: arm64
+            pattern: '*_arm64.deb'
+            image: debian:trixie
+            runner: ubuntu-24.04-arm
           - distro: alpine
-            pattern: '*.apk'
+            arch: x86_64
+            pattern: '*-x86_64.apk'
             image: alpine:3.23
             runner: ubuntu-latest
+          - distro: alpine
+            arch: aarch64
+            pattern: '*-aarch64.apk'
+            image: alpine:3.23
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout code
@@ -170,17 +194,27 @@ jobs:
           set -euo pipefail
 
           mkdir -p pkg
-          # amd64 only: this is a regression check on the exact bytes that were
-          # published, not a fresh matrix build.
+          # A regression check on the exact bytes that were published, not a
+          # fresh build. The pattern selects this runner's architecture only.
           gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
             --pattern "${PATTERN}" --dir pkg
           gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
             --pattern manifest.json --dir .
 
-          # Keep only the host architecture's package.
-          find pkg -type f \( -name '*arm64*' -o -name '*aarch64*' \) -delete
+          # Assert exactly one package matched. The suite installs /pkg/*, so two
+          # would mean installing a foreign architecture and none would mean
+          # testing nothing -- and the previous version of this step, which
+          # deleted arm64 assets after a wildcard download, would silently leave
+          # zero packages on an arm64 runner.
+          found="$(find pkg -type f | wc -l)"
 
-          ls -la pkg
+          if [[ "${found}" -ne 1 ]]; then
+            echo "::error::expected exactly 1 package matching ${PATTERN}, found ${found}"
+            find pkg -type f >&2
+            exit 1
+          fi
+
+          find pkg -type f -exec ls -l {} +
 
       - name: Re-run the acceptance suite against the published package
         shell: bash

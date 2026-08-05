@@ -34,10 +34,12 @@ control plane.
 The entry-point workflows call `authorize-actor` directly, and in `ci.yaml` **both** jobs call it — each runs `prepare-ci-env`, which
 provisions tooling from the pull request's own `mise.ci.toml`, so each executes PR-controlled configuration.
 
-`build-podman-packages.yaml` and `test-podman-packages.yaml` do not gate: they are `workflow_call` targets invoked by `release.yaml` and
-`upstream-watch.yaml`, which have already gated by the time control reaches them. One consequence worth knowing rather than rediscovering:
-`build-podman-packages.yaml` also carries a `workflow_dispatch` trigger, so a direct manual run of it is not gated by the trust list.
-Dispatching a workflow already requires write access to the repository, so this is a narrow gap rather than an open door — but it is a gap.
+`build-podman-packages.yaml` gates through a dedicated `authorize` job that every other job in it depends on. That shape is deliberate:
+`components` and `podman-gnu` are both roots with no `needs`, so gating either one alone would leave the other running for an unauthorized
+dispatch — and `podman-gnu` builds untrusted upstream source as root. It is harmless on the release path, where `release.yaml` has already
+gated and the actor is the same identity.
+
+`test-podman-packages.yaml` gates in its matrix job directly, since it has only one.
 
 ## Tokens stay off disk
 
@@ -51,7 +53,9 @@ untrusted upstream source as root; leaving the token in `.git/config` would give
 blast radius to the credential actually in use and makes the dependency visible in the workflow's own interface. It is declared
 `required: false`, because a prerelease run never dispatches and has no need of the token at all.
 
-`APT_DISPATCH_TOKEN` is the only secret this repository uses — see [package signing](signing.md) for why there is no key material here.
+`APT_DISPATCH_TOKEN` is the only secret any workflow here references — verifiable with
+`grep -ro 'secrets\.[A-Z_]*' .github/`. Others are configured on the repository for unrelated tooling and are never passed
+to a workflow. See [package signing](signing.md) for why there is no key material here.
 
 ## Auto-merge is gated four ways
 

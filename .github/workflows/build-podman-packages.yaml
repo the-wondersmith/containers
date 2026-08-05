@@ -57,12 +57,41 @@ permissions:
   contents: read
 
 jobs:
+  # A single gate for the whole workflow.
+  #
+  # This workflow carries a workflow_dispatch trigger, so it is an entry point in
+  # its own right and not only ever reached through release.yaml's gate. It holds
+  # `packages: write` and builds untrusted upstream source as root.
+  #
+  # It has to be its own job: `components` and `podman-gnu` are both roots with no
+  # `needs`, so gating either one alone would leave the other running for an
+  # unauthorized dispatch. Everything hangs off this instead.
+  #
+  # Harmless on the release path -- release.yaml has already gated by then, and
+  # the actor is the same identity.
+  authorize:
+    name: Authorize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git; do not leave the token on disk.
+          persist-credentials: false
+
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+
   # ───────────────────────────────────────────────────────────────────────────
   # Static musl components, shared verbatim between the .deb and the .apk.
   # Each is looked up in GHCR first and only built on a miss, so a release
   # triggered by (say) a buildah bump rebuilds buildah alone.
   # ───────────────────────────────────────────────────────────────────────────
   components:
+    needs: authorize
     permissions:
       contents: read
       packages: write
@@ -261,6 +290,7 @@ jobs:
   # systemd build tag, for the Debian package only.
   # ───────────────────────────────────────────────────────────────────────────
   podman-gnu:
+    needs: authorize
     permissions:
       contents: read
       packages: write

@@ -3,7 +3,9 @@
 **This repository does not sign packages.**
 
 Signing belongs to the package repository. This repository **builds and attests**; `the-wondersmith/apt` owns the keys and signs what it
-serves. That split is why the only secret here is `APT_DISPATCH_TOKEN` — there is no key material to manage, rotate, or leak.
+serves. That split is why the only secret any workflow here consumes is `APT_DISPATCH_TOKEN` — there is no key material to
+manage, rotate, or leak. (The repository has other secrets configured for unrelated tooling; no workflow in this
+repository references them.)
 
 So the packages are unsigned, and that is a deliberate choice rather than an omission:
 
