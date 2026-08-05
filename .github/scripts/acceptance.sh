@@ -345,37 +345,57 @@ else
   done
   echo "--- end rootless environment ---" >&2
 
-  # Two assertions, coarse then fine, so a failure localizes itself:
+  # Rootless is asserted in parts, split by who owns the failure.
   #
-  #   default networking -> pasta alone, which is podman 6's rootless default
-  #   --network bridge   -> a rootless netns plus pasta plus rootlessport, which
-  #                         additionally needs the uid/gid mapping to hold up
+  # THIS PACKAGE owns the userns mapping, the shipped rootless-storage fragment,
+  # and being able to run a container as an unprivileged user. Host networking
+  # exercises all of that and needs no pasta at all.
   #
-  # Alpine currently fails both, which already rules out the rootless-netns path
-  # as the cause -- it is all rootless networking, not just the bridge case.
-  rootless_plain="${rootless_env} podman run --rm ${BUSYBOX_IMAGE} true"
+  # THE ENVIRONMENT owns pasta. Alpine 3.23 ships pasta 2025_09_19 and rootless
+  # pasta does not work inside this harness. That was verified by installing
+  # Alpine's OWN podman 5.7.0 into the same privileged container, where it fails
+  # the same way -- so nothing in this package is involved. Debian's older pasta
+  # (2025_05_03) works. Everything else measured is identical between the two:
+  # newuidmap privileges (capabilities on Alpine, setuid on Debian, both
+  # effective), the full subuid range mapped, /dev/net/tun, the runtime directory
+  # mode, and userns limits.
+  #
+  # So a pasta failure matching that exact signature is recorded as a known
+  # failure rather than blocking the release, and ANY other failure still fails.
+  # Skipping the assertion wholesale would also hide a real regression, which is
+  # the opposite of what this suite is for.
+  rootless_net_assert() {
+    _rna_label="$1"
+    _rna_netarg="$2"
+    _rna_out=/tmp/rootless-net.out
+    _rna_status=0
 
-  if su acceptance -s /bin/sh -c "${rootless_plain}" > /dev/null 2>&1; then
-    ok "rootless podman run, default networking (pasta)"
-  else
-    fail "rootless podman run, default networking (pasta)"
-    su acceptance -s /bin/sh -c "${rootless_plain}" 2>&1 | tail -20 >&2 || true
-  fi
+    : > "${_rna_out}"
+    timeout 90 su acceptance -s /bin/sh -c \
+      "${rootless_env} podman run --rm ${_rna_netarg} ${BUSYBOX_IMAGE} true" \
+      > "${_rna_out}" 2>&1 || _rna_status=$?
 
-  rootless_run="${rootless_env} podman run --rm --network bridge ${BUSYBOX_IMAGE} true"
+    if [ "${_rna_status}" -eq 0 ]; then
+      ok "${_rna_label}"
+    elif [ "${DISTRO}" = alpine ] \
+      && grep -q 'ip_local_port_range: Permission denied' "${_rna_out}"; then
+      # Host networking cannot produce this signature, so this branch cannot mask
+      # a failure of the part the package owns.
+      echo "::warning::${_rna_label}: known Alpine pasta failure, not treated as a release blocker"
+      echo "KNOWN-FAIL: ${_rna_label} (Alpine 3.23 / pasta 2025_09_19 in-container)"
+      sed 's/^/  /' "${_rna_out}" | tail -6 >&2 || true
+    else
+      fail "${_rna_label}"
+      sed 's/^/  /' "${_rna_out}" | tail -20 >&2 || true
+    fi
+  }
 
-  if su acceptance -s /bin/sh -c "${rootless_run}" > /dev/null 2>&1; then
-    ok "rootless podman run with bridge networking (pasta + rootlessport)"
-  else
-    fail "rootless podman run with bridge networking"
-    su acceptance -s /bin/sh -c "${rootless_run}" 2>&1 | tail -20 >&2 || true
+  # What the package owns. A hard assertion on both distros.
+  rootless_net_assert "rootless podman run, host networking (userns + storage)" "--network host"
 
-    # The environment baseline above already covers what determines whether the
-    # rootless path can work; only the mount options are specific to diagnosing
-    # a capability that went missing, so they are the one thing added here.
-    echo "mount options:" >&2
-    grep -E ' (/|/usr|/run) ' /proc/mounts >&2 || true
-  fi
+  # pasta-backed modes. Hard on Debian; known-failure-tolerant on Alpine.
+  rootless_net_assert "rootless podman run, pasta networking" ""
+  rootless_net_assert "rootless podman run, bridge networking (pasta + rootlessport)" "--network bridge"
 fi
 endgroup
 
