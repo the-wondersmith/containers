@@ -112,11 +112,28 @@ jobs:
           podman_version="$(jq -er '.podman.version' <<< "${COMPONENTS}")"
 
           # The previous manifest is an asset on the most recent release,
-          # including prereleases: two consecutive major bumps must not collide
+          # INCLUDING prereleases: two consecutive major bumps must not collide
           # on the same tag.
+          #
+          # The tag has to be resolved explicitly. `gh release download` with no
+          # tag resolves GitHub's "latest" release, which by definition excludes
+          # prereleases -- so with only a prerelease outstanding it reported
+          # "release not found", the bootstrap branch was taken, and pkgrel reset
+          # to 1. Observed for real: a second dispatch recomputed v6.0.2-1 and
+          # updated the existing prerelease in place rather than publishing -2.
+          #
+          # `gh release list` does include prereleases, so the tag is resolved
+          # from it first and then downloaded by name.
           previous_manifest="$(mktemp)"
-          if gh release download --repo "${GITHUB_REPOSITORY}" \
+          previous_tag="$(
+            gh release list --repo "${GITHUB_REPOSITORY}" \
+              --limit 1 --json tagName --jq '.[0].tagName // ""'
+          )"
+
+          if [[ -n "${previous_tag}" ]] && gh release download "${previous_tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --pattern manifest.json --output "${previous_manifest}" 2> /dev/null; then
+            echo "::notice::previous release: ${previous_tag}"
             previous_podman="$(jq -r '.components.podman.version // ""' "${previous_manifest}")"
             previous_pkgrel="$(jq -r '.pkgrel // 0' "${previous_manifest}")"
           else
