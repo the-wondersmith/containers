@@ -221,6 +221,59 @@ jobs:
 
           [[ "${missing}" -eq 0 ]]
 
+      - name: Give the .apk assets architecture-qualified names
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # melange names its output <pkg>-<version>-r<epoch>.apk with NO
+          # architecture: the arch lives in the output directory, not the
+          # filename. Both arches therefore produce byte-different files with
+          # identical names, and GitHub keys release assets by name -- so
+          # uploading both silently kept only one.
+          #
+          # Observed on v6.0.2-1, which shipped a single podman-6.0.2-r1.apk
+          # while the build had produced two. The assertion above did not catch
+          # it because it checks dist/ paths, not the resulting asset names.
+          #
+          # The .deb side is unaffected: dpkg already puts the arch in the name.
+          for arch in x86_64 aarch64; do
+            dir="dist/podman-alpine-${arch}"
+            src="$(find "${dir}" -maxdepth 1 -name '*.apk' | head -n1)"
+
+            if [[ -z "${src}" ]]; then
+              echo "::error::no .apk in ${dir}"
+              exit 1
+            fi
+
+            base="$(basename "${src}" .apk)"
+
+            # Idempotent: melange may grow arch-aware naming upstream.
+            if [[ "${base}" == *"-${arch}" ]]; then
+              echo "already qualified: ${base}.apk"
+              continue
+            fi
+
+            mv "${src}" "${dir}/${base}-${arch}.apk"
+            echo "renamed ${base}.apk -> ${base}-${arch}.apk"
+          done
+
+          # Guard the class of bug rather than this one instance: every asset
+          # about to be uploaded must have a unique basename, or the upload drops
+          # one without failing.
+          duplicates="$(
+            find dist -type f \( -name '*.apk' -o -name '*.deb' \) -exec basename {} \; \
+              | sort | uniq -d
+          )"
+
+          if [[ -n "${duplicates}" ]]; then
+            echo "::error::asset names collide; the upload would silently drop one:"
+            printf '  %s\n' "${duplicates}" >&2
+            exit 1
+          fi
+
+          echo "asset names are unique"
+
       - name: Write the release manifest
         shell: bash
         env:
