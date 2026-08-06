@@ -1,17 +1,25 @@
 ---
 name: Publish to APT repository
 
-# On every published release, tell `the-wondersmith/apt` to ingest the
-# release's package assets.  Authenticated by the APT_DISPATCH_TOKEN secret
-# (a durable, dispatch-only fine-grained PAT).  Both this workflow and the
-# APT_DISPATCH_TOKEN secret are seeded by the `the-wondersmith/apt` onboarding
-# workflow automatically.
+# The manual escape hatch: the only path covering a release published by a human
+# or a PAT.
 #
-# NOTE: a Release created by the default GITHUB_TOKEN does NOT fire this
-# event (GitHub anti-recursion rule).  The release.yaml workflow dispatches
-# to the APT control plane directly for CI-created releases.  This workflow
-# covers manual releases created via the GitHub UI.  Ingest is idempotent on
-# (repo, tag) so a rare double-dispatch is harmless.
+# The two automated paths dispatch to the control plane themselves, and neither
+# can reach this workflow. A release created with the default GITHUB_TOKEN does
+# not fire `release: published` (GitHub's anti-recursion rule), and clearing the
+# prerelease flag fires `released`, not `published`. So this exists for the one
+# case they do not cover -- and, since the control plane derives its ingest
+# target solely from a repository_dispatch payload, it is the only way to ingest
+# a hand-published release short of hand-rolling that payload.
+#
+# It therefore cannot be exercised by CI and will never accumulate a green run.
+# The absence of runs is expected, not breakage.
+#
+# That is exactly why it preflights rather than dispatching blind: every check
+# below mirrors one the control plane makes, in the same order, so a malformed
+# release fails here -- in the repository whose owner just published it, with a
+# message naming the problem -- instead of failing in the-wondersmith/apt where
+# nobody is watching.
 
 on:
   release:
@@ -20,6 +28,8 @@ on:
 
 permissions:
   contents: read
+  # `gh attestation verify` reads the attestation through the API.
+  attestations: read
 
 jobs:
   notify:
@@ -35,15 +45,89 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          # No step here pushes with git, and several go on to build
-          # untrusted upstream source as root. Leaving the token in
-          # .git/config gives that code something to read.
+          # No step here pushes with git; do not leave the token on disk.
           persist-credentials: false
 
       - name: Authorize the triggering actor
         uses: ./.github/actions/authorize-actor
         with:
           allow-dependabot: "false"
+
+      - name: Preflight the release against what the control plane requires
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          assets="$(
+            gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --json assets --jq '.assets[].name'
+          )"
+
+          echo "assets on ${TAG}:"
+          while IFS= read -r asset; do
+            echo "  ${asset}"
+          done <<< "${assets}"
+
+          debs=()
+          while IFS= read -r asset; do
+            [[ "${asset}" == *.deb ]] && debs+=("${asset}")
+          done <<< "${assets}"
+
+          # (1) There must be .deb assets at all. The control plane errors with
+          #     "no .deb assets on <repo>@<tag>".
+          if [[ "${#debs[@]}" -eq 0 ]]; then
+            echo "::error::${TAG} has no .deb assets; the control plane would reject it"
+            exit 1
+          fi
+
+          # (2) Architecture floor. The control plane requires each package to be
+          #     Architecture: all, or to provide BOTH amd64 and arm64 -- a partial
+          #     set leaves the repository inconsistent for half its users. Checked
+          #     here by name, which is sound because dpkg puts the architecture in
+          #     the filename.
+          for arch in amd64 arm64; do
+            if ! printf '%s\n' "${debs[@]}" | grep -q "_${arch}\.deb$"; then
+              echo "::error::${TAG} has no ${arch} .deb; both amd64 and arm64 are required"
+              printf '  %s\n' "${debs[@]}" >&2
+              exit 1
+            fi
+          done
+
+          # (3) manifest.json is this repository's own release contract: the
+          #     upstream watcher diffs against it and the identity job reads
+          #     pkgrel back out of it. A release without one was not produced by
+          #     release.yaml, and publishing it would strand the next release's
+          #     version derivation.
+          if ! grep -qx 'manifest.json' <<< "${assets}"; then
+            echo "::error::${TAG} has no manifest.json; it was not produced by release.yaml"
+            exit 1
+          fi
+
+          # (4) The check with actual teeth, and the one a hand-made release is
+          #     most likely to fail: every .deb must carry a provenance
+          #     attestation whose signer identity is this repository. A locally
+          #     built .deb verifies against nothing.
+          #
+          #     --signer-repo is what makes this meaningful. Only the signing
+          #     certificate's identity is unforgeable, so it is pinned here for
+          #     the same reason the control plane pins it.
+          mkdir -p preflight
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern '*.deb' --dir preflight
+
+          while IFS= read -r deb; do
+            if ! gh attestation verify "${deb}" \
+              --repo "${GITHUB_REPOSITORY}" --signer-repo "${GITHUB_REPOSITORY}"; then
+              echo "::error::no valid provenance attestation for ${deb##*/}"
+              exit 1
+            fi
+            echo "attested: ${deb##*/}"
+          done < <(find preflight -type f -name '*.deb')
+
+          echo "preflight passed: ${#debs[@]} .deb assets, both architectures, all attested"
 
       - name: Notify the APT control plane
         uses: ./.github/actions/apt-dispatch
