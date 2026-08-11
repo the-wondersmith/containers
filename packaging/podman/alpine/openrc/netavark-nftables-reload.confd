@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Configuration for /etc/init.d/netavark-nftables-reload
 #
 # The watcher reads these from the environment; supervise-daemon passes this

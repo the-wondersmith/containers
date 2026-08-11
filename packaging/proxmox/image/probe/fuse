@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+#
+# Probe whether FUSE mounts actually work in this container.
+#
+# pmxcfs mounts /etc/pve through FUSE.  Without a working mount the management
+# plane does not exist: pveproxy cannot read /etc/pve/local/pve-ssl.key, and the
+# reported error names a missing key file rather than a missing capability.
+#
+# This probe performs a real mount rather than checking that /dev/fuse is a
+# readable character device, because the character-device check passes in cases
+# where pmxcfs still fails.  A real mount proves three things at once: the device
+# opens, CAP_SYS_ADMIN is held, and seccomp is not blocking mount(2).
+#
+# -i suppresses helper lookup so the call goes straight to mount(2) rather than
+# through fusermount3.  No I/O is ever issued against the mount, so no FUSE
+# server is needed -- the mount is created and torn down without a single
+# filesystem operation crossing the transport.
+#
+# Cleanup happens on every exit path, so no global trap is required.
+set -euo pipefail
+
+# shellcheck source=packaging/proxmox/image/lib/probe-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/probe-common.sh"
+
+readonly CAPABILITY="fuse"
+
+main() {
+  local probedir
+  probedir="$(mktemp -d)"
+
+  if [[ ! -c /dev/fuse ]]; then
+    rm -rf "${probedir}"
+    emit_json "${CAPABILITY}" "absent" "device_absent" \
+      "Device node /dev/fuse is absent." \
+      "--device /dev/fuse"
+    return "${PROBE_ABSENT}"
+  fi
+
+  # Bash allocates the descriptor and reports its number, which avoids colliding
+  # with a hardcoded number some caller may already be using.
+  local fusefd
+  if ! exec {fusefd}<> /dev/fuse 2> /dev/null; then
+    rm -rf "${probedir}"
+    emit_json "${CAPABILITY}" "absent" "device_permission" \
+      "/dev/fuse exists but could not be opened read-write." \
+      "--device /dev/fuse with read-write access"
+    return "${PROBE_ABSENT}"
+  fi
+
+  if ! mount -i -t fuse \
+    -o "fd=${fusefd},rootmode=40000,user_id=0,group_id=0" \
+    pveprobe "${probedir}" 2> /dev/null; then
+    exec {fusefd}>&- 2> /dev/null || true
+    rm -rf "${probedir}"
+    emit_json "${CAPABILITY}" "absent" "mount_failed" \
+      "/dev/fuse opened but mount(2) was refused. A character-device check on /dev/fuse would pass in this case and give a false positive." \
+      "--cap-add SYS_ADMIN (or --privileged)"
+    return "${PROBE_ABSENT}"
+  fi
+
+  # Teardown order is load-bearing.  A plain umount issues a FUSE request into a
+  # transport nobody is reading and blocks forever in uninterruptible sleep
+  # (D state, wchan __fuse_simple_request).  That wedged PID 1 with zero log
+  # output, because the probe runs in a command substitution and the parent sat
+  # in anon_pipe_read while Docker reported the container healthy.
+  #
+  # Closing the transport first makes the kernel abort the connection, so any
+  # in-flight request fails with ENOTCONN rather than hanging.  umount -l
+  # (MNT_DETACH) then detaches from the namespace without issuing a request at
+  # all.  Both halves are load-bearing.  Do not "tidy" this back to a plain
+  # umount.
+  exec {fusefd}>&-
+  umount -l "${probedir}" 2> /dev/null || true
+  rm -rf "${probedir}"
+
+  emit_json "${CAPABILITY}" "present" "functional" \
+    "A FUSE filesystem was mounted and unmounted successfully." \
+    ""
+  return "${PROBE_PRESENT}"
+}
+
+main "$@"

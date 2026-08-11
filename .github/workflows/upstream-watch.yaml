@@ -87,12 +87,36 @@ jobs:
           }
 
           previous="$(mktemp)"
-          if gh release download --repo "${GITHUB_REPOSITORY}" \
-            --pattern manifest.json --output "${previous}" 2> /dev/null; then
-            echo "::notice::comparing against $(jq -r '.tag' "${previous}")"
-          else
+          # Without an explicit tag, gh release download resolves GitHub's
+          # "latest" release. Once the first stable proxmox/* release exists
+          # it becomes "latest", making every .components[$c].version // ""
+          # read empty and marking every component as changed -- triggering a
+          # full podman rebuild every week even when nothing upstream moved.
+          previous_podman_tag=""
+          ri_rc=0
+          previous_podman_tag="$(
+            .github/scripts/release-identity.sh previous podman
+          )" || ri_rc=$?
+
+          if [[ "${ri_rc}" -eq 0 ]]; then
+            if gh release download "${previous_podman_tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern manifest.json --output "${previous}" 2> /dev/null; then
+              echo "::notice::comparing against $(jq -r '.tag' "${previous}")"
+            else
+              echo "::notice::no previous release; bootstrapping from upstream latest"
+              echo '{"components":{}}' > "${previous}"
+            fi
+          elif [[ "${ri_rc}" -eq 65 ]]; then
             echo "::notice::no previous release; bootstrapping from upstream latest"
             echo '{"components":{}}' > "${previous}"
+          elif [[ "${ri_rc}" -eq 66 ]]; then
+            echo "::error::release list was truncated; podman previous release not found"
+            echo "::error::cannot safely determine previous versions; refusing to proceed"
+            exit 1
+          else
+            echo "::error::release-identity.sh previous podman failed (exit ${ri_rc})"
+            exit 1
           fi
 
           components='{}'
@@ -171,6 +195,16 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+      # release.yaml's `test` job requests `actions: read` so it can resolve
+      # build artifacts through the API. A reusable workflow cannot grant itself
+      # more than its caller allows, and this omission is rejected at workflow
+      # *validation* time -- the run fails before any job starts, with
+      # "The nested job 'test' is requesting 'actions: read', but is only
+      # allowed 'actions: none'". Nothing in this file mentions `actions`, so
+      # the error names a permission that appears nowhere near the workflow
+      # that failed. release.yaml already carries the same grant one level down
+      # for the same reason; it simply was never propagated up to this caller.
+      actions: read
     # Named explicitly, NOT `secrets: inherit`. A called workflow receives no
     # secrets by default, and inherit would forward every secret this repository
     # holds when release.yaml needs exactly one.

@@ -1,0 +1,80 @@
+#!/bin/sh
+# shellcheck shell=sh
+#
+# ifreload wrapper installed by pve-container-shim.
+#
+# The real binary is diverted to /usr/sbin/ifreload.distrib.  This wrapper
+# exists because the two things PVE asks ifreload to do have opposite answers
+# inside a container: one should be answered honestly by the real
+# implementation, and the other must be narrowed to the part that is safe.
+#
+# PVE calls it in exactly two places, both in PVE/API2/Network.pm:
+#
+#   ifreload -V   from assert_ifupdown2_installed(), which requires the first
+#                 stdout line to match /^\s*ifupdown2:(\S+)\s*$/, the version to
+#                 parse to at least 1.2.8, and the fourth dot-or-dash separated
+#                 field to contain pve, pmx or proxmox.  This runs BEFORE the
+#                 worker forks, so failing it aborts the whole apply.
+#
+#   ifreload -a   from reload_network_config, the web UI's "Apply
+#                 Configuration" button, after the worker has renamed
+#                 /etc/network/interfaces.new over /etc/network/interfaces.
+#
+# An earlier revision answered both with a message on stderr and exit 0.  That
+# made -V emit nothing on stdout, so the version parse produced an empty string,
+# the assertion died, and the operator was told the ifupdown2 package was
+# incompatible -- accusing the package when the cause was this stub.  Delegating
+# -V to the real binary tells the truth: the image installs Proxmox's own
+# ifupdown2 3.3.0-1+pmx12 on both architectures, built from git.proxmox.com,
+# so it genuinely satisfies every gate.
+#
+# -a is narrowed rather than delegated.  The real ifreload diffs the whole of
+# /etc/network/interfaces against live state and applies the difference, which
+# in a container includes the uplink the runtime created and owns.  Applying a
+# file the runtime never wrote to an interface the runtime manages ranges from
+# a no-op to disconnecting the container.  Bringing up a member-less bridge is
+# entirely internal and safe, so that is the subset this honours -- the same
+# subset networking.service applies at boot, through the same helper, so the
+# button and the boot path cannot disagree.
+set -eu
+
+# The real implementation, reached through a path whose basename is
+# "ifreload".  The binary is shared by ifup/ifdown/ifreload/ifquery and
+# dispatches on argv[0], so /usr/sbin/ifreload.distrib -- the name dpkg-divert
+# gave it -- is rejected with "error: Unexpected executable." and empty
+# stdout, which is exactly what made PVE report the package as incompatible.
+REAL="/usr/libexec/pve-container-shim/ifupdown2/ifreload"
+BRIDGES="/usr/libexec/pve-container-shim/ifup-guest-bridges"
+
+case "${1:-}" in
+  -V | --version)
+    # Delegate verbatim.  Anything less than the real output fails the version
+    # gate, and a hard-coded string would be a lie that happens to parse -- it
+    # would keep passing after an upgrade changed the version it claims.
+    if [ ! -x "${REAL}" ]; then
+      printf 'ifreload: %s is missing; cannot report a version\n' "${REAL}" >&2
+      exit 1
+    fi
+    exec "${REAL}" "$@"
+    ;;
+  -a | --all)
+    if [ ! -x "${BRIDGES}" ]; then
+      printf 'ifreload: %s is missing; no bridges were applied\n' "${BRIDGES}" >&2
+      exit 1
+    fi
+    # Report what was and was not done.  The caller only sees an exit code, so
+    # without this an operator who applies a change affecting the uplink would
+    # see success and no explanation of why nothing moved.
+    printf 'ifreload: applying guest bridges only; the uplink belongs to the container runtime\n' >&2
+    exec "${BRIDGES}"
+    ;;
+  *)
+    # Everything else -- -d, -s, -u, per-interface forms -- is neither safe to
+    # delegate nor meaningful to narrow.  Exit 0 deliberately: the callers treat
+    # a non-zero return as a failure of the whole operation they were performing,
+    # and aborting an otherwise-successful API call over an unsupported flag
+    # would be worse than declining it visibly.
+    printf 'ifreload: %s is not supported in a container; no action taken\n' "${1:-<no arguments>}" >&2
+    exit 0
+    ;;
+esac

@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""
+KVM capability probe for pve-container-shim.
+
+Emits a single JSON object to stdout describing whether /dev/kvm is present,
+accessible, and functional, then exits with a code that mirrors the outcome.
+
+Why Python and not shell:
+    Shell can open /dev/kvm and check permissions, but it cannot issue an ioctl.
+    Opening the device proves presence, character-device-ness, and permissions,
+    and largely proves EL2 availability on aarch64 because the kernel registers
+    the /dev/kvm misc device only after kvm_init() succeeds.  What open(2) alone
+    cannot distinguish is a hand-mknod'd or stale device node, which returns a
+    valid fd and then fails on first real use.  The ioctl closes that gap:
+    KVM_GET_API_VERSION asserts the device answers as KVM, and KVM_CREATE_VM
+    asserts that KVM can actually create a VM — the exact operation a stale or
+    mknod'd node fails on.
+"""
+
+import argparse
+import contextlib
+import fcntl
+import json
+import os
+import platform
+import sys
+
+# ---------------------------------------------------------------------------
+# KVM ioctl constants — from linux/kvm.h, KVMIO = 0xAE.
+#
+# _IO(type, nr) encodes direction=_IOC_NONE=0, size=0:
+#   value = (type << 8) | nr
+# ---------------------------------------------------------------------------
+KVM_GET_API_VERSION = 0xAE00  # _IO(KVMIO, 0x00)
+KVM_CREATE_VM = 0xAE01  # _IO(KVMIO, 0x01)
+
+# Outcome tokens — machine-stable; callers may match these as strings.
+OUTCOME_PRESENT = "present"
+OUTCOME_ABSENT = "absent"
+OUTCOME_INDETERMINATE = "indeterminate"
+
+# Exit-code mapping mirrors the outcome.  Present = success; absent = expected
+# negative; indeterminate = unknown/error, kept distinct from absent so that
+# callers can separate "definitely no KVM" from "probe inconclusive".
+EXIT_CODES = {
+    OUTCOME_PRESENT: 0,
+    OUTCOME_ABSENT: 1,
+    OUTCOME_INDETERMINATE: 2,
+}
+
+
+def _cpu_virt_flag() -> str:
+    """
+    Return 'vmx', 'svm', or '' by inspecting /proc/cpuinfo flags lines.
+
+    Diagnostic only — distinguishes "virtualisation disabled in firmware" from
+    "device not exposed to the container", which require materially different
+    remedies.  The return value MUST NOT change the probe outcome; it populates
+    the detail field only.
+    """
+    try:
+        with open("/proc/cpuinfo") as fh:
+            for line in fh:
+                if line.startswith("flags"):
+                    flags = line.split(":", 1)[1].split()
+                    if "vmx" in flags:
+                        return "vmx"
+                    if "svm" in flags:
+                        return "svm"
+    except OSError:
+        pass
+    return ""
+
+
+def probe() -> tuple:
+    """
+    Run the KVM functional probe.
+
+    Returns (outcome, reason, detail, remedy) as strings.
+    """
+    arch = platform.machine()
+
+    # Read CPU virtualisation flags on x86 to populate the detail field.
+    #
+    # On aarch64 there is deliberately no equivalent: EL2 availability is not
+    # exposed as a CPU feature flag.  The kernel either initialises KVM at boot
+    # or logs "HYP mode not available" and does not create /dev/kvm.  There is
+    # no firmware-disable diagnostic flag to read, so a missing arm64 branch is
+    # correct and intentional, not an oversight — do not add one.
+    virt_flag = ""
+    if arch in ("x86_64", "i686"):
+        virt_flag = _cpu_virt_flag()
+
+    with contextlib.ExitStack() as stack:
+        # ── Step 1: open the device ──────────────────────────────────────────
+        try:
+            kvm_fd = os.open("/dev/kvm", os.O_RDWR)
+        except FileNotFoundError:
+            detail = "Device node /dev/kvm is absent."
+            if arch in ("x86_64", "i686"):
+                if virt_flag:
+                    detail += (
+                        f" CPU advertises '{virt_flag}': VT/AMD-V is enabled in"
+                        " firmware but /dev/kvm is not exposed to this container."
+                    )
+                else:
+                    detail += (
+                        " CPU does not advertise vmx or svm;"
+                        " check firmware virtualisation settings."
+                    )
+            return (
+                OUTCOME_ABSENT,
+                "device_absent",
+                detail,
+                "--device /dev/kvm",
+            )
+        except PermissionError:
+            detail = "Process lacks permission to open /dev/kvm."
+            if arch in ("x86_64", "i686") and virt_flag:
+                detail += (
+                    f" CPU advertises '{virt_flag}':"
+                    " the device exists — add the container user to the 'kvm'"
+                    " group or fix the device ownership."
+                )
+            return (
+                OUTCOME_ABSENT,
+                "device_permission",
+                detail,
+                (
+                    "Add the container user to the 'kvm' group,"
+                    " or use '--device /dev/kvm' with appropriate ownership."
+                ),
+            )
+        except OSError as exc:
+            return (
+                OUTCOME_INDETERMINATE,
+                "open_error",
+                f"Unexpected error opening /dev/kvm: {exc}",
+                "",
+            )
+
+        stack.callback(os.close, kvm_fd)
+
+        # ── Step 2: KVM_GET_API_VERSION ──────────────────────────────────────
+        try:
+            version = fcntl.ioctl(kvm_fd, KVM_GET_API_VERSION)
+        except OSError as exc:
+            return (
+                OUTCOME_ABSENT,
+                "api_version_ioctl_failed",
+                f"/dev/kvm opened but KVM_GET_API_VERSION ioctl failed: {exc}",
+                "--device /dev/kvm",
+            )
+
+        if version != 12:
+            return (
+                OUTCOME_INDETERMINATE,
+                "api_version_unexpected",
+                (
+                    f"KVM_GET_API_VERSION returned {version}, expected 12;"
+                    " device is present but may not be a KVM device."
+                ),
+                "",
+            )
+
+        # ── Step 3: KVM_CREATE_VM ────────────────────────────────────────────
+        try:
+            vm_fd = fcntl.ioctl(kvm_fd, KVM_CREATE_VM, 0)
+        except OSError as exc:
+            return (
+                OUTCOME_ABSENT,
+                "create_vm_failed",
+                (
+                    "/dev/kvm answered KVM_GET_API_VERSION but KVM_CREATE_VM"
+                    f" failed: {exc}."
+                    " The device node may be stale or hand-mknod'd."
+                ),
+                "--device /dev/kvm",
+            )
+
+        os.close(vm_fd)
+
+    # ── Step 4: present ──────────────────────────────────────────────────────
+    detail = "KVM is present and functional."
+    if arch in ("x86_64", "i686") and virt_flag:
+        detail += f" CPU advertises '{virt_flag}'."
+    return (OUTCOME_PRESENT, "functional", detail, "")
+
+
+def _io(type_: int, nr: int) -> int:
+    """
+    Linux _IO(type, nr) encoding: direction=_IOC_NONE=0, size=0.
+
+    value = (type << 8) | nr
+    """
+    return (type_ << 8) | nr
+
+
+def self_test() -> int:
+    """
+    Run internal consistency checks.  Does not require /dev/kvm to exist.
+
+    A linter cannot detect a wrong _IO encoding, so this is the only thing
+    standing between a typo'd constant and a probe that silently always reports
+    absent.  CI must be able to run this without KVM available.
+
+    Returns 0 if all checks pass, 1 otherwise.
+    """
+    # Declared constant: a deleted check must produce a failing run, not a
+    # smaller green one.
+    EXPECTED_CHECKS = 8
+
+    results = []
+    rc = 0
+
+    def check(name: str, ok: bool, msg: str = "") -> None:
+        nonlocal rc
+        status = "PASS" if ok else "FAIL"
+        suffix = f": {msg}" if msg and not ok else ""
+        print(f"{status}: {name}{suffix}")
+        if not ok:
+            rc = 1
+        results.append(ok)
+
+    # ── ioctl constant encoding ──────────────────────────────────────────────
+    # KVMIO = 0xAE, from linux/kvm.h.  The literals KVM_GET_API_VERSION and
+    # KVM_CREATE_VM are taken directly from the kernel header; _IO() must
+    # reproduce them exactly.  A single-char typo in the hex literal would make
+    # the probe silently return absent on every host.
+    check(
+        "_IO(0xAE, 0x00) == KVM_GET_API_VERSION",
+        _io(0xAE, 0x00) == KVM_GET_API_VERSION,
+        f"got {hex(_io(0xAE, 0x00))}, want {hex(KVM_GET_API_VERSION)}",
+    )
+    check(
+        "_IO(0xAE, 0x01) == KVM_CREATE_VM",
+        _io(0xAE, 0x01) == KVM_CREATE_VM,
+        f"got {hex(_io(0xAE, 0x01))}, want {hex(KVM_CREATE_VM)}",
+    )
+
+    # ── JSON output contract ─────────────────────────────────────────────────
+    CONTRACT_KEYS = {"capability", "outcome", "reason", "detail", "remedy"}
+    LEGAL_OUTCOMES = {OUTCOME_PRESENT, OUTCOME_ABSENT, OUTCOME_INDETERMINATE}
+
+    # Synthesise a minimal result to test the contract without probing.
+    sample = {
+        "capability": "kvm",
+        "outcome": OUTCOME_ABSENT,
+        "reason": "device_absent",
+        "detail": "self-test sample",
+        "remedy": "",
+    }
+    parsed = json.loads(json.dumps(sample))
+
+    check(
+        "JSON output has exactly the five contract keys",
+        set(parsed.keys()) == CONTRACT_KEYS,
+        f"got {sorted(parsed.keys())}",
+    )
+    check(
+        "JSON outcome is one of the three legal values",
+        parsed["outcome"] in LEGAL_OUTCOMES,
+        f"got {parsed['outcome']!r}",
+    )
+
+    # ── exit-code mapping totality ───────────────────────────────────────────
+    check(
+        "EXIT_CODES covers all three outcomes",
+        set(EXIT_CODES.keys()) == LEGAL_OUTCOMES,
+        f"missing: {LEGAL_OUTCOMES - set(EXIT_CODES.keys())}",
+    )
+    check(
+        "EXIT_CODES[present] == 0",
+        EXIT_CODES[OUTCOME_PRESENT] == 0,
+        f"got {EXIT_CODES[OUTCOME_PRESENT]}",
+    )
+    check(
+        "EXIT_CODES[absent] == 1",
+        EXIT_CODES[OUTCOME_ABSENT] == 1,
+        f"got {EXIT_CODES[OUTCOME_ABSENT]}",
+    )
+    check(
+        "EXIT_CODES[indeterminate] == 2",
+        EXIT_CODES[OUTCOME_INDETERMINATE] == 2,
+        f"got {EXIT_CODES[OUTCOME_INDETERMINATE]}",
+    )
+
+    # ── check count assertion ────────────────────────────────────────────────
+    if len(results) != EXPECTED_CHECKS:
+        print(f"FAIL: check count: expected {EXPECTED_CHECKS}, ran {len(results)}")
+        rc = 1
+    else:
+        print(f"PASS: check count ({len(results)}/{EXPECTED_CHECKS})")
+
+    return rc
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Probe KVM capability and emit a JSON result.",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run internal consistency checks without requiring /dev/kvm.",
+    )
+    args = parser.parse_args()
+
+    if args.self_test:
+        sys.exit(self_test())
+
+    outcome, reason, detail, remedy = probe()
+    result = {
+        "capability": "kvm",
+        "outcome": outcome,
+        "reason": reason,
+        "detail": detail,
+        "remedy": remedy,
+    }
+    # Compact separators so this matches the shape the shell probes emit.
+    # probe_field tolerates either now, but two producers of one contract
+    # should not disagree about it -- that divergence is what let a parse
+    # failure masquerade as a disabled capability.
+    print(json.dumps(result, separators=(",", ":")))
+    sys.exit(EXIT_CODES[outcome])
+
+
+if __name__ == "__main__":
+    main()

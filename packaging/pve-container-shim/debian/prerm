@@ -1,0 +1,23 @@
+#!/bin/sh
+# shellcheck shell=sh
+# prerm: remove diversions installed by postinst.
+#
+# dpkg-divert --remove is the symmetric counterpart to --add. It restores the
+# original file at /usr/sbin/ifreload and /usr/sbin/update-initramfs if the
+# .distrib copy still exists (i.e. the original package that owned the path is
+# still installed). dpkg-divert exits 0 if the diversion does not exist, so
+# this is safe to run even on a first-install failure or a partial state.
+set -e
+
+case "$1" in
+  remove | upgrade | deconfigure)
+    dpkg-divert --package pve-container-shim --rename --remove \
+      /usr/sbin/ifreload
+    dpkg-divert --package pve-container-shim --rename --remove \
+      /usr/sbin/update-initramfs
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

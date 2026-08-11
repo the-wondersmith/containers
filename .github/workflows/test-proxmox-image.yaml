@@ -1,0 +1,195 @@
+---
+name: Proxmox acceptance
+
+# Builds the image on each architecture natively and runs the acceptance suite
+# against it.  Native rather than emulated: the suite exercises systemd as PID 1,
+# a real FUSE mount, cgroup delegation and nested LXC, and every one of those
+# behaves differently under QEMU user-mode emulation.  An emulated failure would
+# be uninterpretable -- it could mean the image is broken, or only that the
+# emulator is, and those have entirely different consequences.
+#
+# The image is built inside this workflow rather than pulled, because a pull
+# would require a push, and gating a push on acceptance that requires the push
+# is circular.  The build here is the same Containerfile the release path uses.
+
+on:
+  workflow_call:
+    inputs:
+      shim-version:
+        description: Version of the pve-container-shim package to build
+        required: false
+        type: string
+        default: 1.0.0-1
+      ifupdown2-ref:
+        description: git ref of ifupdown2 to build
+        required: false
+        type: string
+        default: 9cc4d923aa9124141fb4b30e73823be7f8da6ea8
+      ifupdown2-version:
+        description: Expected ifupdown2 changelog version
+        required: false
+        type: string
+        default: 3.3.0-1+pmx12
+  workflow_dispatch:
+    inputs:
+      shim-version:
+        description: Version of the pve-container-shim package to build
+        required: false
+        type: string
+        default: 1.0.0-1
+      ifupdown2-ref:
+        description: git ref of ifupdown2 to build
+        required: false
+        type: string
+        default: 9cc4d923aa9124141fb4b30e73823be7f8da6ea8
+      ifupdown2-version:
+        description: Expected ifupdown2 changelog version
+        required: false
+        type: string
+        default: 3.3.0-1+pmx12
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Both .deb packages are Architecture: all, so one build serves both legs of
+  # the matrix below.  Calling the reusable workflow rather than inlining the
+  # builds keeps a single definition of how each package is produced; an
+  # earlier revision inlined a shim-only build here and silently drifted away
+  # from the image workflow, which had already gained ifupdown2.
+  packages:
+    uses: ./.github/workflows/build-proxmox-packages.yaml
+    with:
+      shim-version: ${{ inputs.shim-version }}
+      ifupdown2-ref: ${{ inputs.ifupdown2-ref }}
+      ifupdown2-version: ${{ inputs.ifupdown2-version }}
+
+
+  acceptance:
+    needs: packages
+    # This job name is new.  It must not collide with `Lint & test` or
+    # `Validate melange definitions`, both of which are required status checks
+    # in the main-protected ruleset -- renaming either of those makes every pull
+    # request unmergeable, and the symptom is a check that never reports rather
+    # than one that fails.
+    name: Acceptance / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      # `arch` is an original matrix dimension and `runner` is attached through
+      # include:.  If `arch` appeared only inside include: the cross product
+      # would collapse to a single leg and one architecture would silently stop
+      # being tested.
+      matrix:
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      # Each artifact lands in its own directory so the resolution below can
+      # assert exactly one .deb per package.  Merging them would break that
+      # assertion, which is what catches an empty or misnamed artifact before
+      # its absence turns into an opaque failure inside the Containerfile --
+      # an earlier revision of this workflow built only the shim and never
+      # passed IFUPDOWN2_DEB at all, so the undefaulted ARG expanded to empty
+      # and `COPY  /tmp/ifupdown2.deb` copied the build context root.  apt then
+      # reported "Read error - read (21: Is a directory)", naming neither the
+      # build argument nor the workflow that failed to set it.
+      - name: Download pve-container-shim .deb
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          name: pve-container-shim-deb
+          path: dist/shim/
+
+      - name: Download ifupdown2 .deb
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          name: ifupdown2-deb
+          path: dist/ifupdown2/
+
+      - name: Resolve .deb paths
+        id: deb-paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          resolve() {
+            local name="$1" dir="$2"
+            local -a debs=()
+
+            mapfile -d '' debs < <(find "${dir}" -maxdepth 1 -name '*.deb' -print0)
+
+            if (( ${#debs[@]} == 0 )); then
+              echo "::error::no .deb found in ${dir} -- was the ${name} artifact empty?"
+              exit 1
+            fi
+
+            if (( ${#debs[@]} > 1 )); then
+              echo "::error::expected exactly one .deb in ${dir}, found ${#debs[@]}: ${debs[*]}"
+              exit 1
+            fi
+
+            echo "${name}=${debs[0]}" >> "${GITHUB_OUTPUT}"
+            echo "${name}: ${debs[0]}"
+          }
+
+          resolve shim dist/shim
+          resolve ifupdown2 dist/ifupdown2
+
+      - name: Build the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            -f packaging/proxmox/Containerfile \
+            --build-arg "SHIM_DEB=${SHIM_DEB}" \
+            --build-arg "SHIM_VERSION=${SHIM_VERSION}" \
+            --build-arg "IFUPDOWN2_DEB=${IFUPDOWN2_DEB}" \
+            -t pve-acceptance:local \
+            .
+        env:
+          SHIM_DEB: ${{ steps.deb-paths.outputs.shim }}
+          IFUPDOWN2_DEB: ${{ steps.deb-paths.outputs.ifupdown2 }}
+          SHIM_VERSION: ${{ inputs.shim-version }}
+
+
+      # KVM_AVAILABLE is an observation, not a policy.  The acceptance suite
+      # requires it and has no default, so this step is what decides whether
+      # Tier B runs or reports not-attempted.  Reports of /dev/kvm on hosted
+      # runners are contradictory -- GitHub's own answer on actions/runner-images
+      # says KVM is not exposed on virtualised servers, while other sources claim
+      # x64 has it -- so the only trustworthy answer is to look.
+      - name: Probe for /dev/kvm
+        id: kvm
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -c /dev/kvm ]] && [[ -r /dev/kvm ]] && [[ -w /dev/kvm ]]; then
+            echo "::notice::/dev/kvm is present and usable on ${RUNNER_ARCH}"
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::/dev/kvm is not usable on ${RUNNER_ARCH}; Tier B will report not-attempted"
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Run the acceptance suite
+        shell: bash
+        run: .github/scripts/pve-acceptance.sh
+        env:
+          IMAGE: pve-acceptance:local
+          KVM_AVAILABLE: ${{ steps.kvm.outputs.available }}

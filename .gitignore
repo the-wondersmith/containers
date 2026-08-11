@@ -11,6 +11,11 @@
 **/.actrc
 **/.secrets
 **/reference
+# Anchored to the repository root: the working documents live here, but
+# docs/pve-*.md are deliverables and an unanchored pattern would match at any
+# depth and silently swallow them.
+/pve-*.md
+dockurr/
 
 # Local tooling
 .local/bin/
@@ -43,6 +48,10 @@ melange-cache/
 src/
 .melange-workspace/
 .deb-verify/
+# Cached APT indices and unpacked .debs used by the Proxmox package matrix.
+# The generated docs/ artifacts are committed; the inputs they were derived
+# from are not, because they are several hundred megabytes of upstream archive.
+.pve-matrix/
 melange.rsa
 melange.rsa.pub
 

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+#
+# Probe whether cgroup v2 is present and its controllers are delegated.
+#
+# PVE's LXC guests are started through systemd, which needs a writable cgroup v2
+# hierarchy to place them in.  `pct start` fails without delegation, and the
+# failure surfaces as a guest that will not start rather than as a missing
+# capability, which is why this is probed rather than assumed.
+#
+# The distinction this probe draws is between "no cgroup filesystem at all",
+# "cgroup v1 only", and "v2 present but this container may not write to it".
+# The last of those is indeterminate rather than absent: the container can see a
+# v2 hierarchy and the controllers may still be delegated at a level this probe
+# cannot observe from inside, so reporting it as definitively absent would be a
+# stronger claim than the evidence supports.
+set -euo pipefail
+
+# shellcheck source=packaging/proxmox/image/lib/probe-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/probe-common.sh"
+
+readonly CAPABILITY="cgroup_delegation"
+readonly CGROUP_ROOT="/sys/fs/cgroup"
+
+main() {
+  if [[ ! -d "${CGROUP_ROOT}" ]]; then
+    emit_json "${CAPABILITY}" "absent" "cgroupfs_absent" \
+      "${CGROUP_ROOT} does not exist, so no cgroup hierarchy is visible." \
+      "-v /sys/fs/cgroup:/sys/fs/cgroup:rw"
+    return "${PROBE_ABSENT}"
+  fi
+
+  # cgroup.controllers exists only on a v2 hierarchy.  Its absence means the
+  # container sees v1, which PVE's LXC integration does not use.
+  if [[ ! -f "${CGROUP_ROOT}/cgroup.controllers" ]]; then
+    emit_json "${CAPABILITY}" "absent" "cgroup_v1_only" \
+      "${CGROUP_ROOT} exists but exposes no cgroup.controllers, so this is a cgroup v1 hierarchy." \
+      "--cgroupns=host on a host running cgroup v2 (unified hierarchy)"
+    return "${PROBE_ABSENT}"
+  fi
+
+  if [[ ! -w "${CGROUP_ROOT}/cgroup.subtree_control" ]]; then
+    emit_json "${CAPABILITY}" "indeterminate" "subtree_control_readonly" \
+      "cgroup v2 is present but ${CGROUP_ROOT}/cgroup.subtree_control is not writable, so delegation could not be confirmed from inside the container." \
+      "-v /sys/fs/cgroup:/sys/fs/cgroup:rw --cgroupns=host"
+    return "${PROBE_INDETERMINATE}"
+  fi
+
+  emit_json "${CAPABILITY}" "present" "delegated" \
+    "cgroup v2 is mounted and cgroup.subtree_control is writable." \
+    ""
+  return "${PROBE_PRESENT}"
+}
+
+main "$@"

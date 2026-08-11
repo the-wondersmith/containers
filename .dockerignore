@@ -1,0 +1,39 @@
+# Build-context exclusions.
+#
+# `docker build` streams the entire context to the daemon before the first
+# instruction runs.  With a local daemon that is merely wasteful; against a
+# remote context it is a network transfer of everything not excluded here, and
+# the two directories below are the largest things in the tree by a wide
+# margin -- .pve-matrix/ holds the uncompressed Debian and Proxmox package
+# indices (roughly 200 MB) and dist/ holds built artefacts.
+#
+# packaging/proxmox/Containerfile needs exactly one thing from the context that
+# is not source: the shim .deb, passed as SHIM_DEB.  That path is under dist/,
+# so dist/ is excluded and the one file is re-included below.  Excluding the
+# directory and re-including a file is the only ordering that works: a later
+# pattern wins, so the negation has to follow the exclusion.
+
+.git/
+.github/
+docs/
+.pve-matrix/
+.act/
+.act-logs/
+.melange-src/
+.melange-build/
+.melange-workspace/
+melange-cache/
+packages/
+.deb-verify/
+.idea/
+.vscode/
+.devcontainer/
+*.md
+
+# Built artefacts, except the shim package the image installs.
+dist/
+!dist/pve-container-shim_*_all.deb
+# ifupdown2 is built from git.proxmox.com because Proxmox publishes it into
+# binary-amd64 only; the Containerfile takes it as IFUPDOWN2_DEB, also a
+# context-relative path, so it needs the same re-inclusion.
+!dist/ifupdown2_*_all.deb

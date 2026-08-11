@@ -35,6 +35,22 @@ checksum = "sha256:aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e69
 url = "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz"
 provenance = "github-attestations"
 
+[[tools.apko]]
+version = "1.2.34"
+backend = "aqua:chainguard-dev/apko"
+
+[tools.apko."platforms.linux-arm64"]
+checksum = "sha256:172eed6d7536ab3d30c7a167ae190c09624513883ca402bd75894d6da561bfff"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.2.34/apko_1.2.34_linux_arm64.tar.gz"
+
+[tools.apko."platforms.linux-x64"]
+checksum = "sha256:dc43747116c78ca545f9225a6bb15d28ed145ccd425d4f0195db9180b4514e89"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.2.34/apko_1.2.34_linux_amd64.tar.gz"
+
+[tools.apko."platforms.macos-arm64"]
+checksum = "sha256:9737d14f5efa06b21be79c6e79f77b9dcbf03381d108a6496765faf0212099ab"
+url = "https://github.com/chainguard-dev/apko/releases/download/v1.2.34/apko_1.2.34_darwin_arm64.tar.gz"
+
 [[tools.cargo-binstall]]
 version = "1.21.1"
 backend = "aqua:cargo-bins/cargo-binstall"
@@ -53,6 +69,22 @@ provenance = "github-attestations"
 checksum = "sha256:bd03935f1a6d652647f6d42a2cd39396a55094ffddc65bed0debebfe32feea43"
 url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.21.1/cargo-binstall-aarch64-apple-darwin.zip"
 provenance = "github-attestations"
+
+[[tools.crane]]
+version = "0.21.8"
+backend = "aqua:google/go-containerregistry"
+
+[tools.crane."platforms.linux-arm64"]
+checksum = "sha256:9a528bee5f3443a9b20a25b46040ed518384b07c470ad444028fdb2dcebd4056"
+url = "https://github.com/google/go-containerregistry/releases/download/v0.21.8/go-containerregistry_Linux_arm64.tar.gz"
+
+[tools.crane."platforms.linux-x64"]
+checksum = "sha256:59b59f68ee37aba51f5523d69ec779ee925d9be4e279f9220eca357267f2ee67"
+url = "https://github.com/google/go-containerregistry/releases/download/v0.21.8/go-containerregistry_Linux_x86_64.tar.gz"
+
+[tools.crane."platforms.macos-arm64"]
+checksum = "sha256:b258a3486fe1b6200f8a2be520ce69d4f0c3f4dc3b50add8d546ec5df6937b17"
+url = "https://github.com/google/go-containerregistry/releases/download/v0.21.8/go-containerregistry_Darwin_arm64.tar.gz"
 
 [[tools.editorconfig-checker]]
 version = "3.8.0"
@@ -86,6 +118,22 @@ url = "https://dl.google.com/go/go1.26.5.linux-amd64.tar.gz"
 checksum = "sha256:efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a"
 url = "https://dl.google.com/go/go1.26.5.darwin-arm64.tar.gz"
 
+[[tools.hadolint]]
+version = "2.15.1"
+backend = "aqua:hadolint/hadolint"
+
+[tools.hadolint."platforms.linux-arm64"]
+checksum = "sha256:f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-arm64"
+
+[tools.hadolint."platforms.linux-x64"]
+checksum = "sha256:c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64"
+
+[tools.hadolint."platforms.macos-arm64"]
+checksum = "sha256:5c09f3213f8e40406abe048233d985eebef336d4a6a20021be47fadb6cf480a2"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-macos-arm64"
+
 [[tools.jq]]
 version = "1.8.2"
 backend = "aqua:jqlang/jq"
@@ -106,20 +154,20 @@ url = "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-macos-arm64"
 provenance = "github-attestations"
 
 [[tools.melange]]
-version = "0.56.5"
+version = "0.57.0"
 backend = "aqua:chainguard-dev/melange"
 
 [tools.melange."platforms.linux-arm64"]
-checksum = "sha256:3b8565a5d924df0a7a7e61895f62972017f5613bead2d45218e0e4d47f7601c1"
-url = "https://github.com/chainguard-dev/melange/releases/download/v0.56.5/melange_0.56.5_linux_arm64.tar.gz"
+checksum = "sha256:8d0608cb1978ffbf29c207a2b289e0c091558de940ebaaaec8bd5ea473eb8ecf"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.57.0/melange_0.57.0_linux_arm64.tar.gz"
 
 [tools.melange."platforms.linux-x64"]
-checksum = "sha256:40e17d259c9fd7bce8e000a59239d7b9ebf13971117334ad117ae6eefd98f92b"
-url = "https://github.com/chainguard-dev/melange/releases/download/v0.56.5/melange_0.56.5_linux_amd64.tar.gz"
+checksum = "sha256:9623b8da6b1955ea34a3389954ce613cc9f3bb17939dab640af87cab541f0cfa"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.57.0/melange_0.57.0_linux_amd64.tar.gz"
 
 [tools.melange."platforms.macos-arm64"]
-checksum = "sha256:aea875ca20e1998dcae017df9eb466b5f19d575e26f70a2543fae940a5e9d8a0"
-url = "https://github.com/chainguard-dev/melange/releases/download/v0.56.5/melange_0.56.5_darwin_arm64.tar.gz"
+checksum = "sha256:8e054e6310fdfe5f876c018b86c8622a7b3bacad96e6274c8706ccc9dfdf686f"
+url = "https://github.com/chainguard-dev/melange/releases/download/v0.57.0/melange_0.57.0_darwin_arm64.tar.gz"
 
 [[tools.oras]]
 version = "1.3.3"
@@ -152,6 +200,25 @@ url = "https://github.com/pre-commit/pre-commit/releases/download/v4.6.1/pre-com
 [tools.pre-commit."platforms.macos-arm64"]
 checksum = "sha256:6768cc8f4f810509b9272211c70ef7bb405c52da2ba81b673b2c361a72f1815d"
 url = "https://github.com/pre-commit/pre-commit/releases/download/v4.6.1/pre-commit-4.6.1.pyz"
+
+[[tools.ruff]]
+version = "0.16.1"
+backend = "aqua:astral-sh/ruff"
+
+[tools.ruff."platforms.linux-arm64"]
+checksum = "sha256:5929d9f37fc518a3825f33a76ad8092c0555ca045ca1dbf5e680038a402c840c"
+url = "https://github.com/astral-sh/ruff/releases/download/0.16.1/ruff-aarch64-unknown-linux-musl.tar.gz"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.linux-x64"]
+checksum = "sha256:23469683052cd2db1589f15032dd1751b2a3f212062e9fc901b0776d25fb36bc"
+url = "https://github.com/astral-sh/ruff/releases/download/0.16.1/ruff-x86_64-unknown-linux-musl.tar.gz"
+provenance = "github-attestations"
+
+[tools.ruff."platforms.macos-arm64"]
+checksum = "sha256:a8df4e8e9f22e3b0ae0b9f165ddaafb7e34df692197a6c1a361e7426f90681d5"
+url = "https://github.com/astral-sh/ruff/releases/download/0.16.1/ruff-aarch64-apple-darwin.tar.gz"
+provenance = "github-attestations"
 
 [[tools.rust]]
 version = "1.97.1"
@@ -201,23 +268,27 @@ url = "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux
 checksum = "sha256:9680526be4a66ea1ffe988ed08af58e1400fe1e4f4aef5bd88b20bb9b3da33f8"
 url = "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_darwin_arm64"
 
+[[tools.skopeo]]
+version = "1.24.0"
+backend = "go:go.podman.io/skopeo/cmd/skopeo"
+
 [[tools.uv]]
-version = "0.12.1"
+version = "0.12.2"
 backend = "aqua:astral-sh/uv"
 
 [tools.uv."platforms.linux-arm64"]
-checksum = "sha256:ce218dad9eb48a39dd86160bec6291fac7275f20a9cabcc4bc10dd2c757208f8"
-url = "https://github.com/astral-sh/uv/releases/download/0.12.1/uv-aarch64-unknown-linux-musl.tar.gz"
+checksum = "sha256:73b87f0d65d7dfcd39753a51ce65592360b02c29f8e1bc2c85cc4190fe914499"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.2/uv-aarch64-unknown-linux-musl.tar.gz"
 provenance = "github-attestations"
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:47823f814693bab8623308341369190de30b5c621eec5b1ee20352eae8c7982c"
-url = "https://github.com/astral-sh/uv/releases/download/0.12.1/uv-x86_64-unknown-linux-musl.tar.gz"
+checksum = "sha256:2dbe8209c9592f6d1009b8565f4bf29813427907bee2236023c013101ede343f"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.2/uv-x86_64-unknown-linux-musl.tar.gz"
 provenance = "github-attestations"
 
 [tools.uv."platforms.macos-arm64"]
-checksum = "sha256:77d2906988e8074fd43f2f329ec452ebbf9b0c257ba1c66451c71de70a6baf42"
-url = "https://github.com/astral-sh/uv/releases/download/0.12.1/uv-aarch64-apple-darwin.tar.gz"
+checksum = "sha256:fa909fea3bc06f460db79017030a221fdbc43ec4478f089cb554d8335c090817"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.2/uv-aarch64-apple-darwin.tar.gz"
 provenance = "github-attestations"
 
 [[tools.yamllint]]

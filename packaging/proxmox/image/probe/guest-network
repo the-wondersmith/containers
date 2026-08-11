@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# shellcheck source=packaging/proxmox/image/lib/probe-common.sh
+#
+# Probe: can this container build the guest network datapath?
+#
+# Guest networking needs three things the runtime may or may not grant: the
+# ability to create a bridge, the ability to install NAT rules, and IP
+# forwarding.  All three come down to CAP_NET_ADMIN, which Docker's default
+# capability set does not include.
+#
+# The probe creates a throwaway bridge and deletes it again rather than
+# inspecting the capability bounding set.  Reading CapBnd would tell us what
+# the kernel believes we hold, which is not the same as what we can actually
+# do -- a seccomp profile can refuse a syscall a capability permits, and a
+# read-only /proc/sys can refuse a sysctl write that reports success.  The
+# functional attempt answers the question that matters.
+#
+# It deliberately does NOT probe the uplink or attempt NAT.  Creating a bridge
+# is the narrowest operation that proves CAP_NET_ADMIN is effective, and it is
+# entirely internal: nothing else on the host or in the container can observe
+# a bridge that exists for a few milliseconds under a name nothing references.
+# Installing and removing a NAT rule to test for the ability to install NAT
+# rules would briefly change packet handling for every process in the
+# namespace, which is too much collateral for a probe.
+set -euo pipefail
+
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/probe-common.sh"
+
+readonly CAPABILITY="guest_network"
+
+# A name that cannot collide with a bridge an operator or PVE created.  Linux
+# caps interface names at 15 characters, so this is close to the limit and
+# deliberately not vmbr-anything.
+readonly PROBE_BRIDGE="pveprobebr0"
+
+main() {
+  local detail remedy
+
+  remedy="--cap-add NET_ADMIN (or --privileged)"
+
+  if ! command -v ip > /dev/null 2>&1; then
+    emit_json "${CAPABILITY}" "indeterminate" "iproute2_missing" \
+      "The ip command is not on PATH, so bridge creation cannot be tested." \
+      "reinstall iproute2"
+    return "${PROBE_INDETERMINATE}"
+  fi
+
+  # A leftover from an aborted earlier run would make the create fail for a
+  # reason that has nothing to do with capabilities.  Removing it first is
+  # cheap and cannot affect anything else, since nothing but this probe ever
+  # uses the name.
+  ip link delete "${PROBE_BRIDGE}" type bridge > /dev/null 2>&1 || true
+
+  if ! detail="$(ip link add name "${PROBE_BRIDGE}" type bridge 2>&1)"; then
+    # Report the kernel's own words rather than a guess.  "Operation not
+    # permitted" and "Operation not supported" mean different things -- the
+    # first is a missing capability, the second a kernel without bridge
+    # support -- and an operator can act on the distinction.
+    emit_json "${CAPABILITY}" "absent" "bridge_create_failed" \
+      "Creating a test bridge failed: ${detail}" \
+      "${remedy}"
+    return "${PROBE_ABSENT}"
+  fi
+
+  # Creating a bridge and bringing one up are different operations, and a
+  # bridge that cannot be brought up carries no traffic.  Test both.
+  if ! detail="$(ip link set "${PROBE_BRIDGE}" up 2>&1)"; then
+    ip link delete "${PROBE_BRIDGE}" type bridge > /dev/null 2>&1 || true
+    emit_json "${CAPABILITY}" "absent" "bridge_up_failed" \
+      "A test bridge was created but could not be brought up: ${detail}" \
+      "${remedy}"
+    return "${PROBE_ABSENT}"
+  fi
+
+  if ! detail="$(ip link delete "${PROBE_BRIDGE}" type bridge 2>&1)"; then
+    # Creating succeeded and deleting did not, which leaves a stray interface
+    # behind.  That is not a capability answer either way, so report it as
+    # indeterminate and name the interface so it can be cleaned up by hand.
+    emit_json "${CAPABILITY}" "indeterminate" "bridge_delete_failed" \
+      "A test bridge was created but could not be removed: ${detail}. Interface ${PROBE_BRIDGE} may still exist." \
+      "remove ${PROBE_BRIDGE} manually"
+    return "${PROBE_INDETERMINATE}"
+  fi
+
+  emit_json "${CAPABILITY}" "present" "functional" \
+    "A test bridge was created, brought up and removed successfully." \
+    ""
+  return "${PROBE_PRESENT}"
+}
+
+main "$@"

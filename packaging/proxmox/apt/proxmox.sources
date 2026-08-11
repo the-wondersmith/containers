@@ -1,0 +1,19 @@
+# APT source for the official Proxmox VE repository, deb822 format.
+#
+# One file, both architectures.  The repository publishes binary-amd64 and
+# binary-arm64 under the same suite and component, so nothing here branches on
+# the target architecture.  Confirmed against the live InRelease, which declares
+# `Architectures: amd64 arm64`.
+#
+# pve-no-subscription rather than pve-enterprise: the enterprise component
+# requires a subscription key that a published image cannot carry.  The two
+# components track the same versions; enterprise lags by a validation cycle.
+#
+# The keyring this refers to is fetched and checksum-verified in the
+# Containerfile.  Signed-By is a path rather than an inline key so the
+# verification step and the trust decision stay in one place.
+Types: deb
+URIs: http://download.proxmox.com/debian/pve
+Suites: trixie
+Components: pve-no-subscription
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg

@@ -1,5 +1,9 @@
 # Build model
 
+This describes the **podman package** build — the melange/dpkg pipeline that produces the `.apk` and `.deb`. The Proxmox VE image is built
+differently, by `docker build` against [`packaging/proxmox/Containerfile`](../packaging/proxmox/Containerfile) and in CI by
+`build-proxmox-image.yaml`; it does not go through melange and has no mise build task. See [the image guide](pve-image.md) for its shape.
+
 Components are built by [melange](https://github.com/chainguard-dev/melange) against **Alpine 3.23** — not Wolfi, which is glibc-based. 3.23
 rather than an older branch because podman 6 requires Go ≥ 1.25.9 and Alpine 3.21 ships only 1.23.9; 3.23 ships 1.25.10 along with Rust 1.91
 and `libseccomp-static`.

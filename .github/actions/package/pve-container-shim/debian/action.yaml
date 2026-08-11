@@ -1,0 +1,164 @@
+---
+# Assemble the pve-container-shim Debian package.  Nothing is compiled.
+#
+# This is a pure script-and-configuration package: Architecture: all, so one
+# build produces a single _all.deb that is correct on every architecture.
+# There is no component staging, no per-arch tarball, and no musl/glibc split —
+# the payload is the source tree as-is.
+#
+# Preconditions, installed by the calling job:
+#   * debhelper (>= 13.13), dpkg-dev, build-essential, fakeroot
+#   * python3 — required by the kvm-probe libexec helper
+name: package-pve-container-shim-debian
+description: >-
+  Assemble the pve-container-shim .deb from the packaging source tree.
+  Produces an unsigned, binary-only package; repository signing belongs to
+  the APT control plane.
+
+inputs:
+  shim-version:
+    required: true
+    description: >-
+      Debian version string for this package, e.g. 1.0.0-1.  Must match the
+      top entry in debian/changelog exactly; the action hard-fails if they
+      differ.
+  outdir:
+    required: false
+    default: dist
+    description: >-
+      Directory to write the .deb into.  A relative path resolves against
+      GITHUB_WORKSPACE.
+
+outputs:
+  deb-path:
+    description: Absolute path to the produced .deb.
+    value: ${{ steps.collect.outputs.deb-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Stage the source tree
+      id: stage
+      shell: bash
+      env:
+        SHIM_VERSION: ${{ inputs.shim-version }}
+        BUILD_ROOT: ${{ runner.temp }}/shim-pkg
+      run: |
+        set -euo pipefail
+
+        build_dir="${BUILD_ROOT}/pve-container-shim-${SHIM_VERSION}"
+
+        # dpkg-buildpackage writes its output to the PARENT of the source
+        # directory, so the source tree gets its own named subdirectory and the
+        # parent doubles as the output drop.
+        rm -rf "${BUILD_ROOT}"
+        mkdir -p "${build_dir}"
+
+        # Copy the whole package directory rather than naming its payload
+        # subdirectories.  An earlier revision enumerated debian, libexec, sbin
+        # and systemd; when tmpfiles/ was added the list was not updated, and
+        # the build failed at dh_install with "Cannot find (any matches for)
+        # tmpfiles/pve-container-shim.conf" -- a message that names the file
+        # but not the staging step that failed to bring it.  debian/install is
+        # already the authoritative list of what ships; a second, partial list
+        # here can only ever drift away from it.
+        cp -a "${GITHUB_WORKSPACE}/packaging/pve-container-shim/." "${build_dir}/"
+
+        # git does not reliably preserve the executable bit for everyone who
+        # touches this tree, and dpkg-buildpackage hard-fails on a
+        # non-executable debian/rules.
+        chmod +x "${build_dir}/debian/rules"
+
+        # kvm-probe is installed as an executable; preserve the bit regardless
+        # of what git or the checkout action recorded.
+        chmod +x "${build_dir}/libexec/kvm-probe"
+
+        echo "build-dir=${build_dir}" >> "${GITHUB_OUTPUT}"
+
+    - name: Render debian/control and verify the changelog
+      id: assemble
+      shell: bash
+      env:
+        SHIM_VERSION: ${{ inputs.shim-version }}
+        BUILD_DIR: ${{ steps.stage.outputs.build-dir }}
+      run: |
+        set -euo pipefail
+
+        control_in="${BUILD_DIR}/debian/control.in"
+        control="${BUILD_DIR}/debian/control"
+
+        # control is generated, never committed: @SHIM_VERSION@ is the only
+        # marker and is substituted at build time.  sed rather than envsubst,
+        # because envsubst would eat the ${shlibs:Depends} and ${misc:Depends}
+        # substvars that debhelper expects to resolve at package build time.
+        sed \
+          -e "s|@SHIM_VERSION@|${SHIM_VERSION}|g" \
+          "${control_in}" > "${control}"
+
+        rm -f "${control_in}"
+
+        if grep -q '@[A-Z_]*@' "${control}"; then
+          echo "::error::unsubstituted placeholders remain in debian/control"
+          grep -n '@[A-Z_]*@' "${control}" >&2
+          exit 1
+        fi
+
+        # The changelog is not rewritten.  The shim-version input must match
+        # the top entry exactly; a mismatch means either the input was wrong or
+        # the changelog was not bumped, both of which are release bugs that must
+        # fail loudly rather than ship a package whose version metadata
+        # disagrees with its declared content.
+        changelog="${BUILD_DIR}/debian/changelog"
+        changelog_version="$(dpkg-parsechangelog -l "${changelog}" -S Version)"
+
+        if [[ "${changelog_version}" != "${SHIM_VERSION}" ]]; then
+          echo "::error::changelog version '${changelog_version}' does not match shim-version input '${SHIM_VERSION}'"
+          echo "Either bump the changelog (dch -v ${SHIM_VERSION}) or pass the correct version to this action." >&2
+          exit 1
+        fi
+
+        echo "changelog: ${changelog_version} (matches shim-version input)"
+
+    - name: Build the .deb
+      shell: bash
+      working-directory: ${{ steps.stage.outputs.build-dir }}
+      run: |
+        set -euo pipefail
+
+        # -b        binary-only; no source .dsc.
+        # -us -uc   unsigned; the APT control plane signs the repository.
+        # No --host-arch: the package is Architecture: all, so dpkg-buildpackage
+        # produces a single _all.deb that is correct on every architecture
+        # without per-arch staging or a host-arch override.
+        dpkg-buildpackage -b -us -uc
+
+    - name: Collect the built .deb
+      id: collect
+      shell: bash
+      env:
+        BUILD_DIR: ${{ steps.stage.outputs.build-dir }}
+        SHIM_VERSION: ${{ inputs.shim-version }}
+        OUTDIR: ${{ inputs.outdir }}
+      run: |
+        set -euo pipefail
+
+        case "${OUTDIR}" in
+          /*) outdir="${OUTDIR}" ;;
+          *)  outdir="${GITHUB_WORKSPACE}/${OUTDIR}" ;;
+        esac
+
+        mkdir -p "${outdir}"
+
+        deb_name="pve-container-shim_${SHIM_VERSION}_all.deb"
+        deb_src="$(dirname "${BUILD_DIR}")/${deb_name}"
+
+        if [[ ! -f "${deb_src}" ]]; then
+          echo "::error::expected package not found: ${deb_src}"
+          ls -la "$(dirname "${BUILD_DIR}")" >&2
+          exit 1
+        fi
+
+        mv "${deb_src}" "${outdir}/${deb_name}"
+
+        echo "deb-path=${outdir}/${deb_name}" >> "${GITHUB_OUTPUT}"
+        echo "::notice::built ${deb_name}"

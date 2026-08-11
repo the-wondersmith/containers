@@ -1,0 +1,4811 @@
+{
+  "scope": "Static unit files shipped by closure members. Units synthesised at run time by systemd generators are NOT represented; treat this inventory as a lower bound.",
+  "reference_arch": "amd64",
+  "units": [
+    {
+      "package": "apparmor",
+      "unit": "apparmor.service",
+      "path": "/usr/lib/systemd/system/apparmor.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target",
+        "systemd-journald-audit.socket"
+      ],
+      "before": [
+        "sysinit.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionSecurity=apparmor",
+        "ConditionPathExists=!/rofs/etc/apparmor.d",
+        "ConditionPathExists=!/run/live/overlay/work"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "apt",
+      "unit": "apt-daily-upgrade.service",
+      "path": "/usr/lib/systemd/system/apt-daily-upgrade.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "apt-daily.service",
+        "network.target",
+        "network-online.target",
+        "systemd-networkd.service",
+        "NetworkManager.service",
+        "connman.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionACPower=true"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "apt",
+      "unit": "apt-daily-upgrade.timer",
+      "path": "/usr/lib/systemd/system/apt-daily-upgrade.timer",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "apt-daily.timer"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "timers.target"
+      ]
+    },
+    {
+      "package": "apt",
+      "unit": "apt-daily.service",
+      "path": "/usr/lib/systemd/system/apt-daily.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network.target",
+        "network-online.target",
+        "systemd-networkd.service",
+        "NetworkManager.service",
+        "connman.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionACPower=true"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "apt",
+      "unit": "apt-daily.timer",
+      "path": "/usr/lib/systemd/system/apt-daily.timer",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "timers.target"
+      ]
+    },
+    {
+      "package": "ceph-common",
+      "unit": "ceph.target",
+      "path": "/usr/lib/systemd/system/ceph.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "ceph-common",
+      "unit": "rbdmap.service",
+      "path": "/usr/lib/systemd/system/rbdmap.service",
+      "requires": [],
+      "wants": [
+        "network-online.target",
+        "remote-fs-pre.target",
+        "ceph.target"
+      ],
+      "after": [
+        "network-online.target",
+        "ceph.target"
+      ],
+      "before": [
+        "remote-fs-pre.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "ceph-fuse",
+      "unit": "ceph-fuse.target",
+      "path": "/usr/lib/systemd/system/ceph-fuse.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "ceph.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "remote-fs.target",
+        "ceph.target"
+      ]
+    },
+    {
+      "package": "ceph-fuse",
+      "unit": "ceph-fuse@.service",
+      "path": "/usr/lib/systemd/system/ceph-fuse@.service",
+      "requires": [],
+      "wants": [
+        "network-online.target",
+        "local-fs.target",
+        "time-sync.target"
+      ],
+      "after": [
+        "network-online.target",
+        "local-fs.target",
+        "time-sync.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "ceph-fuse.target"
+      ]
+    },
+    {
+      "package": "corosync",
+      "unit": "corosync.service",
+      "path": "/usr/lib/systemd/system/corosync.service",
+      "requires": [
+        "network-online.target"
+      ],
+      "wants": [],
+      "after": [
+        "network-online.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionKernelCommandLine=!nocluster"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "dbus",
+      "unit": "dbus.service",
+      "path": "/usr/lib/systemd/system/dbus.service",
+      "requires": [
+        "dbus.socket"
+      ],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "dbus-system-bus-common",
+      "unit": "dbus.socket",
+      "path": "/usr/lib/systemd/system/dbus.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "dmeventd",
+      "unit": "dm-event.service",
+      "path": "/usr/lib/systemd/system/dm-event.service",
+      "requires": [
+        "dm-event.socket"
+      ],
+      "wants": [],
+      "after": [
+        "dm-event.socket"
+      ],
+      "before": [
+        "local-fs-pre.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "dmeventd",
+      "unit": "dm-event.socket",
+      "path": "/usr/lib/systemd/system/dm-event.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sockets.target"
+      ]
+    },
+    {
+      "package": "dpkg",
+      "unit": "dpkg-db-backup.service",
+      "path": "/usr/lib/systemd/system/dpkg-db-backup.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "dpkg",
+      "unit": "dpkg-db-backup.timer",
+      "path": "/usr/lib/systemd/system/dpkg-db-backup.timer",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "timers.target"
+      ]
+    },
+    {
+      "package": "ifupdown2",
+      "unit": "ifup@.service",
+      "path": "/usr/lib/systemd/system/ifup@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target",
+        "network-pre.target",
+        "networking.service",
+        "systemd-sysctl.service",
+        "sys-subsystem-net-devices-%i.device"
+      ],
+      "before": [
+        "network.target",
+        "shutdown.target",
+        "network-online.target"
+      ],
+      "binds_to": [
+        "sys-subsystem-net-devices-%i.device"
+      ],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "ifupdown2",
+      "unit": "networking.service",
+      "path": "/usr/lib/systemd/system/networking.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "basic.target",
+        "network.target",
+        "shutdown.target"
+      ]
+    },
+    {
+      "package": "libpam-modules-bin",
+      "unit": "pam_namespace.service",
+      "path": "/usr/lib/systemd/system/pam_namespace.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "multi-user.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "logrotate",
+      "unit": "logrotate.service",
+      "path": "/usr/lib/systemd/system/logrotate.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionACPower=true"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "logrotate",
+      "unit": "logrotate.timer",
+      "path": "/usr/lib/systemd/system/logrotate.timer",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "timers.target"
+      ]
+    },
+    {
+      "package": "lvm2",
+      "unit": "blk-availability.service",
+      "path": "/usr/lib/systemd/system/blk-availability.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "iscsi-shutdown.service",
+        "iscsi.service",
+        "iscsid.service",
+        "fcoe.service",
+        "rbdmap.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "lvm2",
+      "unit": "lvm2-lvmpolld.service",
+      "path": "/usr/lib/systemd/system/lvm2-lvmpolld.service",
+      "requires": [
+        "lvm2-lvmpolld.socket"
+      ],
+      "wants": [],
+      "after": [
+        "lvm2-lvmpolld.socket"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "lvm2",
+      "unit": "lvm2-lvmpolld.socket",
+      "path": "/usr/lib/systemd/system/lvm2-lvmpolld.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "lvm2",
+      "unit": "lvm2-monitor.service",
+      "path": "/usr/lib/systemd/system/lvm2-monitor.service",
+      "requires": [
+        "dm-event.socket"
+      ],
+      "wants": [],
+      "after": [
+        "dm-event.socket",
+        "dm-event.service"
+      ],
+      "before": [
+        "local-fs-pre.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "lxc-pve",
+      "unit": "lxc-monitord.service",
+      "path": "/usr/lib/systemd/system/lxc-monitord.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "syslog.service",
+        "network.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "lxc-pve",
+      "unit": "lxc-net.service",
+      "path": "/usr/lib/systemd/system/lxc-net.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network-online.target"
+      ],
+      "before": [
+        "lxc.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionVirtualization=!lxc"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "lxc-pve",
+      "unit": "lxc.service",
+      "path": "/usr/lib/systemd/system/lxc.service",
+      "requires": [],
+      "wants": [
+        "lxc-net.service"
+      ],
+      "after": [
+        "network.target",
+        "lxc-net.service",
+        "remote-fs.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "lxc-pve",
+      "unit": "lxc@.service",
+      "path": "/usr/lib/systemd/system/lxc@.service",
+      "requires": [],
+      "wants": [
+        "lxc.service"
+      ],
+      "after": [
+        "lxc.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "lxcfs",
+      "unit": "lxcfs.service",
+      "path": "/usr/lib/systemd/system/lxcfs.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "lxc.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionVirtualization=!container"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "nfs-common",
+      "unit": "auth-rpcgss-module.service",
+      "path": "/usr/lib/systemd/system/auth-rpcgss-module.service",
+      "requires": [],
+      "wants": [
+        "gssproxy.service",
+        "rpc-gssd.service"
+      ],
+      "after": [],
+      "before": [
+        "gssproxy.service",
+        "rpc-svcgssd.service",
+        "rpc-gssd.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/etc/krb5.keytab",
+        "ConditionVirtualization=!container"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "nfs-common",
+      "unit": "nfs-blkmap.service",
+      "path": "/usr/lib/systemd/system/nfs-blkmap.service",
+      "requires": [
+        "rpc_pipefs.target"
+      ],
+      "wants": [],
+      "after": [
+        "rpc_pipefs.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "nfs-client.target"
+      ]
+    },
+    {
+      "package": "nfs-common",
+      "unit": "nfs-client.target",
+      "path": "/usr/lib/systemd/system/nfs-client.target",
+      "requires": [],
+      "wants": [
+        "remote-fs-pre.target",
+        "rpc-statd-notify.service",
+        "auth-rpcgss-module.service"
+      ],
+      "after": [
+        "rpc-gssd.service",
+        "rpc-svcgssd.service",
+        "gssproxy.service"
+      ],
+      "before": [
+        "remote-fs-pre.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target",
+        "remote-fs.target"
+      ]
+    },
+    {
+      "package": "nfs-common",
+      "unit": "nfs-idmapd.service",
+      "path": "/usr/lib/systemd/system/nfs-idmapd.service",
+      "requires": [
+        "rpc_pipefs.target"
+      ],
+      "wants": [
+        "network-online.target"
+      ],
+      "after": [
+        "rpc_pipefs.target",
+        "local-fs.target",
+        "network-online.target"
+      ],
+      "before": [],
+      "binds_to": [
+        "nfs-server.service"
+      ],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "nfs-common",
+      "unit": "nfs-utils.service",
+      "path": "/usr/lib/systemd/system/nfs-utils.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "nfs-common",
+      "unit": "rpc-gssd.service",
+      "path": "/usr/lib/systemd/system/rpc-gssd.service",
+      "requires": [
+        "rpc_pipefs.target"
+      ],
+      "wants": [],
+      "after": [
+        "rpc_pipefs.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/etc/krb5.keytab"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "nfs-common",
+      "unit": "rpc-statd-notify.service",
+      "path": "/usr/lib/systemd/system/rpc-statd-notify.service",
+      "requires": [],
+      "wants": [
+        "network-online.target"
+      ],
+      "after": [
+        "local-fs.target",
+        "network-online.target",
+        "nss-lookup.target",
+        "nfs-server.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "nfs-common",
+      "unit": "rpc-statd.service",
+      "path": "/usr/lib/systemd/system/rpc-statd.service",
+      "requires": [
+        "nss-lookup.target",
+        "rpcbind.socket"
+      ],
+      "wants": [
+        "network-online.target",
+        "rpc-statd-notify.service"
+      ],
+      "after": [
+        "network-online.target",
+        "nss-lookup.target",
+        "rpcbind.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "nfs-common",
+      "unit": "rpc-svcgssd.service",
+      "path": "/usr/lib/systemd/system/rpc-svcgssd.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target",
+        "gssproxy.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=|!/run/gssproxy.pid",
+        "ConditionPathExists=|!/proc/net/rpc/use-gss-proxy",
+        "ConditionPathExists=/etc/krb5.keytab"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "openssh-server",
+      "unit": "rescue-ssh.target",
+      "path": "/usr/lib/systemd/system/rescue-ssh.target",
+      "requires": [
+        "network-online.target",
+        "ssh.service"
+      ],
+      "wants": [],
+      "after": [
+        "network-online.target",
+        "ssh.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "openssh-server",
+      "unit": "ssh.service",
+      "path": "/usr/lib/systemd/system/ssh.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network.target",
+        "nss-user-lookup.target",
+        "auditd.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/ssh/sshd_not_to_be_run"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "openssh-server",
+      "unit": "ssh.socket",
+      "path": "/usr/lib/systemd/system/ssh.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/ssh/sshd_not_to_be_run"
+      ],
+      "wanted_by": [
+        "sockets.target"
+      ]
+    },
+    {
+      "package": "openssh-server",
+      "unit": "sshd-keygen.service",
+      "path": "/usr/lib/systemd/system/sshd-keygen.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "ssh.service",
+        "sshd.service",
+        "sshd@.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionFirstBoot=yes",
+        "ConditionPathIsReadWrite=/etc/ssh",
+        "ConditionPathIsSymbolicLink=!/etc/ssh"
+      ],
+      "wanted_by": [
+        "ssh.service",
+        "sshd.service",
+        "sshd@.service",
+        "ssh.socket"
+      ]
+    },
+    {
+      "package": "openssh-server",
+      "unit": "sshd@.service",
+      "path": "/usr/lib/systemd/system/sshd@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "nss-user-lookup.target",
+        "auditd.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "postfix",
+      "unit": "postfix-resolvconf.path",
+      "path": "/usr/lib/systemd/system/postfix-resolvconf.path",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/etc/resolv.conf"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "postfix",
+      "unit": "postfix-resolvconf.service",
+      "path": "/usr/lib/systemd/system/postfix-resolvconf.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/etc/resolv.conf",
+        "ConditionPathIsDirectory=/var/spool/postfix/etc"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "postfix",
+      "unit": "postfix.service",
+      "path": "/usr/lib/systemd/system/postfix.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network.target",
+        "nss-lookup.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/etc/postfix/main.cf"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "postfix",
+      "unit": "postfix@.service",
+      "path": "/usr/lib/systemd/system/postfix@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network.target",
+        "nss-lookup.target"
+      ],
+      "before": [
+        "postfix.service"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "proxmox-kernel-helper",
+      "unit": "proxmox-boot-cleanup.service",
+      "path": "/usr/lib/systemd/system/proxmox-boot-cleanup.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-remount-fs.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/etc/kernel/next-boot-pin"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-cluster",
+      "unit": "pve-cluster.service",
+      "path": "/usr/lib/systemd/system/pve-cluster.service",
+      "requires": [],
+      "wants": [
+        "corosync.service",
+        "rrdcached.service"
+      ],
+      "after": [
+        "network.target",
+        "sys-fs-fuse-connections.mount",
+        "time-sync.target",
+        "rrdcached.service"
+      ],
+      "before": [
+        "corosync.service",
+        "cron.service",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionFileIsExecutable=/usr/bin/pmxcfs"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-container",
+      "unit": "pve-container-debug@.service",
+      "path": "/usr/lib/systemd/system/pve-container-debug@.service",
+      "requires": [],
+      "wants": [
+        "lxc.service"
+      ],
+      "after": [
+        "lxc.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "pve-container",
+      "unit": "pve-container@.service",
+      "path": "/usr/lib/systemd/system/pve-container@.service",
+      "requires": [],
+      "wants": [
+        "lxc.service"
+      ],
+      "after": [
+        "lxc.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "pve-firewall",
+      "unit": "pve-firewall.service",
+      "path": "/usr/lib/systemd/system/pve-firewall.service",
+      "requires": [],
+      "wants": [
+        "pve-cluster.service",
+        "pvefw-logger.service"
+      ],
+      "after": [
+        "pvefw-logger.service",
+        "pve-cluster.service",
+        "network.target",
+        "systemd-modules-load.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/sbin/pve-firewall"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-firewall",
+      "unit": "pvefw-logger.service",
+      "path": "/usr/lib/systemd/system/pvefw-logger.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/sbin/pvefw-logger"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-ha-manager",
+      "unit": "pve-ha-crm.service",
+      "path": "/usr/lib/systemd/system/pve-ha-crm.service",
+      "requires": [],
+      "wants": [
+        "pve-cluster.service",
+        "watchdog-mux.service",
+        "pvedaemon.service"
+      ],
+      "after": [
+        "pve-cluster.service",
+        "corosync.service",
+        "pvedaemon.service",
+        "watchdog-mux.service",
+        "syslog.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/sbin/pve-ha-crm"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-ha-manager",
+      "unit": "pve-ha-lrm.service",
+      "path": "/usr/lib/systemd/system/pve-ha-lrm.service",
+      "requires": [],
+      "wants": [
+        "pve-cluster.service",
+        "watchdog-mux.service",
+        "pvedaemon.service",
+        "pve-ha-crm.service",
+        "lxc.service",
+        "pve-storage.target"
+      ],
+      "after": [
+        "corosync.service",
+        "lxc.service",
+        "pve-cluster.service",
+        "pve-ha-crm.service",
+        "pve-storage.target",
+        "pvedaemon.service",
+        "pveproxy.service",
+        "ssh.service",
+        "syslog.service",
+        "watchdog-mux.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/sbin/pve-ha-lrm"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-ha-manager",
+      "unit": "watchdog-mux.service",
+      "path": "/usr/lib/systemd/system/watchdog-mux.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "pve-lxc-syscalld",
+      "unit": "pve-lxc-syscalld.service",
+      "path": "/usr/lib/systemd/system/pve-lxc-syscalld.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "pve-guests.service"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pve-daily-update.service",
+      "path": "/usr/lib/systemd/system/pve-daily-update.service",
+      "requires": [],
+      "wants": [
+        "network-online.target",
+        "pve-cluster.service"
+      ],
+      "after": [
+        "network-online.target",
+        "pve-cluster.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pve-daily-update.timer",
+      "path": "/usr/lib/systemd/system/pve-daily-update.timer",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "timers.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pve-firewall-commit.service",
+      "path": "/usr/lib/systemd/system/pve-firewall-commit.service",
+      "requires": [],
+      "wants": [
+        "pve-cluster.service"
+      ],
+      "after": [
+        "corosync.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pve-guests.service",
+      "path": "/usr/lib/systemd/system/pve-guests.service",
+      "requires": [],
+      "wants": [
+        "pvestatd.service",
+        "pveproxy.service",
+        "spiceproxy.service",
+        "pve-firewall.service",
+        "lxc.service"
+      ],
+      "after": [
+        "pveproxy.service",
+        "pvestatd.service",
+        "spiceproxy.service",
+        "pve-firewall.service",
+        "lxc.service",
+        "pve-ha-crm.service",
+        "pve-ha-lrm.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/bin/pvesh"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pve-sdn-commit.service",
+      "path": "/usr/lib/systemd/system/pve-sdn-commit.service",
+      "requires": [],
+      "wants": [
+        "pve-cluster.service",
+        "network.target"
+      ],
+      "after": [
+        "frr.service",
+        "network.target",
+        "corosync.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pve-storage.target",
+      "path": "/usr/lib/systemd/system/pve-storage.target",
+      "requires": [],
+      "wants": [
+        "remote-fs.target"
+      ],
+      "after": [
+        "remote-fs.target",
+        "ceph.target",
+        "ceph-mon.target",
+        "ceph-osd.target",
+        "ceph-mds.target",
+        "ceph-mgr.target",
+        "glusterd.service",
+        "open-iscsi.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pvebanner.service",
+      "path": "/usr/lib/systemd/system/pvebanner.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "console-getty.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/bin/pvebanner"
+      ],
+      "wanted_by": [
+        "getty.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pvedaemon.service",
+      "path": "/usr/lib/systemd/system/pvedaemon.service",
+      "requires": [],
+      "wants": [
+        "corosync.service",
+        "pve-cluster.service"
+      ],
+      "after": [
+        "corosync.service",
+        "pve-cluster.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/bin/pvedaemon"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pvenetcommit.service",
+      "path": "/usr/lib/systemd/system/pvenetcommit.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "sysinit.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pveproxy.service",
+      "path": "/usr/lib/systemd/system/pveproxy.service",
+      "requires": [],
+      "wants": [
+        "pve-cluster.service",
+        "pvedaemon.service",
+        "ssh.service",
+        "pve-storage.target"
+      ],
+      "after": [
+        "pve-storage.target",
+        "pve-cluster.service",
+        "pvedaemon.service",
+        "ssh.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/bin/pveproxy"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pvescheduler.service",
+      "path": "/usr/lib/systemd/system/pvescheduler.service",
+      "requires": [],
+      "wants": [
+        "pve-cluster.service"
+      ],
+      "after": [
+        "pve-cluster.service",
+        "pve-guests.service",
+        "pve-storage.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/bin/pvescheduler"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "pvestatd.service",
+      "path": "/usr/lib/systemd/system/pvestatd.service",
+      "requires": [],
+      "wants": [
+        "pve-cluster.service"
+      ],
+      "after": [
+        "pve-cluster.service",
+        "pvenetcommit.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/bin/pvestatd"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "pve-manager",
+      "unit": "spiceproxy.service",
+      "path": "/usr/lib/systemd/system/spiceproxy.service",
+      "requires": [],
+      "wants": [
+        "pveproxy.service"
+      ],
+      "after": [
+        "pveproxy.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/usr/bin/spiceproxy"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "qemu-server",
+      "unit": "pve-dbus-vmstate@.service",
+      "path": "/usr/lib/systemd/system/pve-dbus-vmstate@.service",
+      "requires": [
+        "dbus.socket"
+      ],
+      "wants": [],
+      "after": [
+        "dbus.socket"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "qemu-server",
+      "unit": "pve-query-machine-capabilities.service",
+      "path": "/usr/lib/systemd/system/pve-query-machine-capabilities.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "pve-ha-lrm.service",
+        "pve-guests.service"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "qemu-server",
+      "unit": "qmeventd.service",
+      "path": "/usr/lib/systemd/system/qmeventd.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "pve-ha-lrm.service",
+        "pve-guests.service"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "rpcbind",
+      "unit": "rpcbind.service",
+      "path": "/usr/lib/systemd/system/rpcbind.service",
+      "requires": [
+        "rpcbind.socket"
+      ],
+      "wants": [
+        "remote-fs-pre.target",
+        "rpcbind.target"
+      ],
+      "after": [
+        "systemd-tmpfiles-setup.service"
+      ],
+      "before": [
+        "remote-fs-pre.target",
+        "rpcbind.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "rpcbind",
+      "unit": "rpcbind.socket",
+      "path": "/usr/lib/systemd/system/rpcbind.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sockets.target"
+      ]
+    },
+    {
+      "package": "rsync",
+      "unit": "rsync.service",
+      "path": "/usr/lib/systemd/system/rsync.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/etc/rsyncd.conf"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "smartmontools",
+      "unit": "smartmontools.service",
+      "path": "/usr/lib/systemd/system/smartmontools.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionVirtualization=no"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "basic.target",
+      "path": "/usr/lib/systemd/system/basic.target",
+      "requires": [
+        "sysinit.target"
+      ],
+      "wants": [
+        "sockets.target",
+        "timers.target",
+        "paths.target",
+        "slices.target",
+        "tmp.mount"
+      ],
+      "after": [
+        "sysinit.target",
+        "sockets.target",
+        "paths.target",
+        "slices.target",
+        "tmp.mount"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "blockdev@.target",
+      "path": "/usr/lib/systemd/system/blockdev@.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "umount.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "bluetooth.target",
+      "path": "/usr/lib/systemd/system/bluetooth.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "boot-complete.target",
+      "path": "/usr/lib/systemd/system/boot-complete.target",
+      "requires": [
+        "sysinit.target"
+      ],
+      "wants": [],
+      "after": [
+        "sysinit.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "capsule@.service",
+      "path": "/usr/lib/systemd/system/capsule@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "dbus.service",
+        "systemd-oomd.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "console-getty.service",
+      "path": "/usr/lib/systemd/system/console-getty.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-user-sessions.service",
+        "plymouth-quit-wait.service",
+        "getty-pre.target",
+        "rc-local.service"
+      ],
+      "before": [
+        "getty.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/dev/console"
+      ],
+      "wanted_by": [
+        "getty.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "container-getty@.service",
+      "path": "/usr/lib/systemd/system/container-getty@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-user-sessions.service",
+        "plymouth-quit-wait.service",
+        "getty-pre.target",
+        "rc-local.service"
+      ],
+      "before": [
+        "getty.target",
+        "rescue.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/dev/pts/%I"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "debug-shell.service",
+      "path": "/usr/lib/systemd/system/debug-shell.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-vconsole-setup.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/dev/tty9"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "emergency.service",
+      "path": "/usr/lib/systemd/system/emergency.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "shutdown.target",
+        "rescue.service"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "emergency.target",
+      "path": "/usr/lib/systemd/system/emergency.target",
+      "requires": [
+        "emergency.service"
+      ],
+      "wants": [],
+      "after": [
+        "emergency.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "exit.target",
+      "path": "/usr/lib/systemd/system/exit.target",
+      "requires": [
+        "systemd-exit.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-exit.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "factory-reset.target",
+      "path": "/usr/lib/systemd/system/factory-reset.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "final.target",
+      "path": "/usr/lib/systemd/system/final.target",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "shutdown.target",
+        "umount.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "first-boot-complete.target",
+      "path": "/usr/lib/systemd/system/first-boot-complete.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionFirstBoot=yes"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "getty-pre.target",
+      "path": "/usr/lib/systemd/system/getty-pre.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "getty-static.service",
+      "path": "/usr/lib/systemd/system/getty-static.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/dev/tty0",
+        "ConditionPathExists=!/usr/bin/dbus-daemon",
+        "ConditionPathExists=!/usr/bin/dbus-broker"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "getty.target",
+      "path": "/usr/lib/systemd/system/getty.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "getty@.service",
+      "path": "/usr/lib/systemd/system/getty@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-user-sessions.service",
+        "plymouth-quit-wait.service",
+        "getty-pre.target",
+        "rc-local.service"
+      ],
+      "before": [
+        "getty.target",
+        "rescue.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/dev/tty0"
+      ],
+      "wanted_by": [
+        "getty.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "graphical.target",
+      "path": "/usr/lib/systemd/system/graphical.target",
+      "requires": [
+        "multi-user.target"
+      ],
+      "wants": [
+        "display-manager.service"
+      ],
+      "after": [
+        "multi-user.target",
+        "rescue.service",
+        "rescue.target",
+        "display-manager.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "halt.target",
+      "path": "/usr/lib/systemd/system/halt.target",
+      "requires": [
+        "systemd-halt.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-halt.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "hibernate.target",
+      "path": "/usr/lib/systemd/system/hibernate.target",
+      "requires": [
+        "systemd-hibernate.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-hibernate.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "hybrid-sleep.target",
+      "path": "/usr/lib/systemd/system/hybrid-sleep.target",
+      "requires": [
+        "systemd-hybrid-sleep.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-hybrid-sleep.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-cleanup.service",
+      "path": "/usr/lib/systemd/system/initrd-cleanup.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "initrd-root-fs.target",
+        "initrd-fs.target",
+        "initrd.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-fs.target",
+      "path": "/usr/lib/systemd/system/initrd-fs.target",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "initrd-parse-etc.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-parse-etc.service",
+      "path": "/usr/lib/systemd/system/initrd-parse-etc.service",
+      "requires": [
+        "initrd-root-fs.target"
+      ],
+      "wants": [],
+      "after": [
+        "initrd-root-fs.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-root-device.target",
+      "path": "/usr/lib/systemd/system/initrd-root-device.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-root-fs.target",
+      "path": "/usr/lib/systemd/system/initrd-root-fs.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-switch-root.service",
+      "path": "/usr/lib/systemd/system/initrd-switch-root.service",
+      "requires": [],
+      "wants": [
+        "initrd-switch-root.target"
+      ],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-switch-root.target",
+      "path": "/usr/lib/systemd/system/initrd-switch-root.target",
+      "requires": [],
+      "wants": [
+        "initrd-switch-root.service",
+        "initrd-udevadm-cleanup-db.service",
+        "initrd-root-fs.target",
+        "initrd-fs.target",
+        "systemd-journald.service",
+        "initrd-cleanup.service"
+      ],
+      "after": [
+        "initrd-udevadm-cleanup-db.service",
+        "initrd-root-fs.target",
+        "initrd-fs.target",
+        "emergency.service",
+        "emergency.target",
+        "initrd-cleanup.service"
+      ],
+      "before": [
+        "initrd-switch-root.service"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-udevadm-cleanup-db.service",
+      "path": "/usr/lib/systemd/system/initrd-udevadm-cleanup-db.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-udevd.service",
+        "systemd-udevd-control.socket",
+        "systemd-udevd-kernel.socket",
+        "systemd-udev-trigger.service",
+        "systemd-udev-settle.service"
+      ],
+      "before": [
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd-usr-fs.target",
+      "path": "/usr/lib/systemd/system/initrd-usr-fs.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "initrd.target",
+      "path": "/usr/lib/systemd/system/initrd.target",
+      "requires": [
+        "basic.target"
+      ],
+      "wants": [
+        "initrd-root-fs.target",
+        "initrd-root-device.target",
+        "initrd-fs.target",
+        "initrd-usr-fs.target",
+        "initrd-parse-etc.service"
+      ],
+      "after": [
+        "initrd-root-fs.target",
+        "initrd-root-device.target",
+        "initrd-fs.target",
+        "initrd-usr-fs.target",
+        "basic.target",
+        "rescue.service",
+        "rescue.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "kexec.target",
+      "path": "/usr/lib/systemd/system/kexec.target",
+      "requires": [
+        "systemd-kexec.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-kexec.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "kmod-static-nodes.service",
+      "path": "/usr/lib/systemd/system/kmod-static-nodes.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sysinit.target",
+        "systemd-tmpfiles-setup-dev-early.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionCapability=CAP_SYS_MODULE",
+        "ConditionFileNotEmpty=/lib/modules/%v/modules.devname",
+        "ConditionPathExists=/usr/bin/kmod"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "ldconfig.service",
+      "path": "/usr/lib/systemd/system/ldconfig.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target",
+        "systemd-confext.service",
+        "systemd-tmpfiles-setup.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "systemd-update-done.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionNeedsUpdate=|/etc",
+        "ConditionFileNotEmpty=|!/etc/ld.so.cache"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "local-fs-pre.target",
+      "path": "/usr/lib/systemd/system/local-fs-pre.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "local-fs.target",
+      "path": "/usr/lib/systemd/system/local-fs.target",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs-pre.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "modprobe@.service",
+      "path": "/usr/lib/systemd/system/modprobe@.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sysinit.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionCapability=CAP_SYS_MODULE"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "multi-user.target",
+      "path": "/usr/lib/systemd/system/multi-user.target",
+      "requires": [
+        "basic.target"
+      ],
+      "wants": [],
+      "after": [
+        "basic.target",
+        "rescue.service",
+        "rescue.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "network-online.target",
+      "path": "/usr/lib/systemd/system/network-online.target",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "network-pre.target",
+      "path": "/usr/lib/systemd/system/network-pre.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "network.target",
+      "path": "/usr/lib/systemd/system/network.target",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network-pre.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "nss-lookup.target",
+      "path": "/usr/lib/systemd/system/nss-lookup.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "nss-user-lookup.target",
+      "path": "/usr/lib/systemd/system/nss-user-lookup.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "paths.target",
+      "path": "/usr/lib/systemd/system/paths.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "poweroff.target",
+      "path": "/usr/lib/systemd/system/poweroff.target",
+      "requires": [
+        "systemd-poweroff.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-poweroff.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "printer.target",
+      "path": "/usr/lib/systemd/system/printer.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "quotaon-root.service",
+      "path": "/usr/lib/systemd/system/quotaon-root.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-quotacheck-root.service"
+      ],
+      "before": [
+        "local-fs.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "quotaon@.service",
+      "path": "/usr/lib/systemd/system/quotaon@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-quotacheck@%i.service",
+        "%i.mount"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "%i.mount"
+      ],
+      "conditions": [
+        "ConditionPathExists=/usr/sbin/quotaon",
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "rc-local.service",
+      "path": "/usr/lib/systemd/system/rc-local.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "network.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionFileIsExecutable=/etc/rc.local"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "reboot.target",
+      "path": "/usr/lib/systemd/system/reboot.target",
+      "requires": [
+        "systemd-reboot.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-reboot.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "remote-fs-pre.target",
+      "path": "/usr/lib/systemd/system/remote-fs-pre.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "remote-fs.target",
+      "path": "/usr/lib/systemd/system/remote-fs.target",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "remote-fs-pre.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "rescue.service",
+      "path": "/usr/lib/systemd/system/rescue.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "sysinit.target",
+        "plymouth-start.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "rescue.target",
+      "path": "/usr/lib/systemd/system/rescue.target",
+      "requires": [
+        "sysinit.target",
+        "rescue.service"
+      ],
+      "wants": [],
+      "after": [
+        "sysinit.target",
+        "rescue.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "rpcbind.target",
+      "path": "/usr/lib/systemd/system/rpcbind.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "serial-getty@.service",
+      "path": "/usr/lib/systemd/system/serial-getty@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "dev-%i.device",
+        "systemd-user-sessions.service",
+        "plymouth-quit-wait.service",
+        "getty-pre.target",
+        "rc-local.service"
+      ],
+      "before": [
+        "getty.target",
+        "rescue.service"
+      ],
+      "binds_to": [
+        "dev-%i.device"
+      ],
+      "conditions": [],
+      "wanted_by": [
+        "getty.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "shutdown.target",
+      "path": "/usr/lib/systemd/system/shutdown.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "sigpwr.target",
+      "path": "/usr/lib/systemd/system/sigpwr.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "sleep.target",
+      "path": "/usr/lib/systemd/system/sleep.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "slices.target",
+      "path": "/usr/lib/systemd/system/slices.target",
+      "requires": [],
+      "wants": [
+        "-.slice",
+        "system.slice"
+      ],
+      "after": [
+        "-.slice",
+        "system.slice"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "smartcard.target",
+      "path": "/usr/lib/systemd/system/smartcard.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "sockets.target",
+      "path": "/usr/lib/systemd/system/sockets.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "soft-reboot.target",
+      "path": "/usr/lib/systemd/system/soft-reboot.target",
+      "requires": [
+        "systemd-soft-reboot.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-soft-reboot.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "sound.target",
+      "path": "/usr/lib/systemd/system/sound.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "ssh-access.target",
+      "path": "/usr/lib/systemd/system/ssh-access.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "storage-target-mode.target",
+      "path": "/usr/lib/systemd/system/storage-target-mode.target",
+      "requires": [],
+      "wants": [
+        "systemd-storagetm.service",
+        "systemd-udevd.service",
+        "systemd-udev-trigger.service",
+        "systemd-networkd.service",
+        "systemd-network-generator.service",
+        "systemd-journald.socket",
+        "systemd-journald-dev-log.socket",
+        "plymouth-start.service"
+      ],
+      "after": [
+        "systemd-storagetm.service",
+        "systemd-udevd.service",
+        "systemd-udev-trigger.service",
+        "systemd-networkd.service",
+        "systemd-network-generator.service",
+        "systemd-journald.socket",
+        "systemd-journald-dev-log.socket",
+        "plymouth-start.service",
+        "rescue.service",
+        "rescue.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "suspend-then-hibernate.target",
+      "path": "/usr/lib/systemd/system/suspend-then-hibernate.target",
+      "requires": [
+        "systemd-suspend-then-hibernate.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-suspend-then-hibernate.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "suspend.target",
+      "path": "/usr/lib/systemd/system/suspend.target",
+      "requires": [
+        "systemd-suspend.service"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-suspend.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "swap.target",
+      "path": "/usr/lib/systemd/system/swap.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "sysinit.target",
+      "path": "/usr/lib/systemd/system/sysinit.target",
+      "requires": [],
+      "wants": [
+        "local-fs.target",
+        "swap.target"
+      ],
+      "after": [
+        "local-fs.target",
+        "swap.target"
+      ],
+      "before": [
+        "emergency.service",
+        "emergency.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "syslog.socket",
+      "path": "/usr/lib/systemd/system/syslog.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target",
+        "shutdown.target",
+        "emergency.service"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "system-update-cleanup.service",
+      "path": "/usr/lib/systemd/system/system-update-cleanup.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "system-update.target"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=|/system-update",
+        "ConditionPathIsSymbolicLink=|/system-update",
+        "ConditionPathExists=|/etc/system-update",
+        "ConditionPathIsSymbolicLink=|/etc/system-update"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "system-update-pre.target",
+      "path": "/usr/lib/systemd/system/system-update-pre.target",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "sysinit.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "system-update.target",
+      "path": "/usr/lib/systemd/system/system-update.target",
+      "requires": [
+        "sysinit.target"
+      ],
+      "wants": [
+        "system-update-cleanup.service"
+      ],
+      "after": [
+        "sysinit.target",
+        "system-update-pre.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-ask-password-console.path",
+      "path": "/usr/lib/systemd/system/systemd-ask-password-console.path",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "plymouth-start.service"
+      ],
+      "before": [
+        "paths.target",
+        "cryptsetup.target",
+        "emergency.service",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/run/plymouth/pid"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-ask-password-console.service",
+      "path": "/usr/lib/systemd/system/systemd-ask-password-console.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "plymouth-start.service",
+        "systemd-vconsole-setup.service"
+      ],
+      "before": [
+        "emergency.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/run/plymouth/pid"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-ask-password-wall.path",
+      "path": "/usr/lib/systemd/system/systemd-ask-password-wall.path",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "paths.target",
+        "cryptsetup.target",
+        "emergency.service",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-ask-password-wall.service",
+      "path": "/usr/lib/systemd/system/systemd-ask-password-wall.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-user-sessions.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-backlight@.service",
+      "path": "/usr/lib/systemd/system/systemd-backlight@.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-battery-check.service",
+      "path": "/usr/lib/systemd/system/systemd-battery-check.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "plymouth-start.service"
+      ],
+      "before": [
+        "initrd-root-device.target",
+        "systemd-hibernate-resume.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionVirtualization=no",
+        "ConditionDirectoryNotEmpty=/sys/class/power_supply/",
+        "ConditionKernelCommandLine=!systemd.battery_check=0",
+        "ConditionKernelCommandLine=!systemd.battery-check=0"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-binfmt.service",
+      "path": "/usr/lib/systemd/system/systemd-binfmt.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "proc-sys-fs-binfmt_misc.automount",
+        "proc-sys-fs-binfmt_misc.mount",
+        "local-fs.target"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsMountPoint=/proc/sys/fs/binfmt_misc",
+        "ConditionDirectoryNotEmpty=|/lib/binfmt.d",
+        "ConditionDirectoryNotEmpty=|/usr/lib/binfmt.d",
+        "ConditionDirectoryNotEmpty=|/usr/local/lib/binfmt.d",
+        "ConditionDirectoryNotEmpty=|/etc/binfmt.d",
+        "ConditionDirectoryNotEmpty=|/run/binfmt.d"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-boot-check-no-failures.service",
+      "path": "/usr/lib/systemd/system/systemd-boot-check-no-failures.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "default.target",
+        "graphical.target",
+        "multi-user.target"
+      ],
+      "before": [
+        "boot-complete.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-bsod.service",
+      "path": "/usr/lib/systemd/system/systemd-bsod.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-battery-check.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionVirtualization=no"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-confext.service",
+      "path": "/usr/lib/systemd/system/systemd-confext.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "sysinit.target",
+        "systemd-tmpfiles-setup.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionCapability=CAP_SYS_ADMIN",
+        "ConditionDirectoryNotEmpty=|/run/confexts",
+        "ConditionDirectoryNotEmpty=|/var/lib/confexts",
+        "ConditionDirectoryNotEmpty=|/usr/local/lib/confexts",
+        "ConditionDirectoryNotEmpty=|/usr/lib/confexts",
+        "ConditionDirectoryNotEmpty=|/.extra/confext"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-creds.socket",
+      "path": "/usr/lib/systemd/system/systemd-creds.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-creds@.service",
+      "path": "/usr/lib/systemd/system/systemd-creds@.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-exit.service",
+      "path": "/usr/lib/systemd/system/systemd-exit.service",
+      "requires": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "wants": [],
+      "after": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-firstboot.service",
+      "path": "/usr/lib/systemd/system/systemd-firstboot.service",
+      "requires": [],
+      "wants": [
+        "first-boot-complete.target"
+      ],
+      "after": [
+        "systemd-remount-fs.service",
+        "systemd-sysusers.service",
+        "systemd-tmpfiles-setup.service",
+        "systemd-vconsole-setup.service"
+      ],
+      "before": [
+        "first-boot-complete.target",
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=/etc",
+        "ConditionFirstBoot=yes"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-fsck-root.service",
+      "path": "/usr/lib/systemd/system/systemd-fsck-root.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "local-fs.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=!/"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-fsck@.service",
+      "path": "/usr/lib/systemd/system/systemd-fsck@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "%i.device",
+        "systemd-fsck-root.service",
+        "local-fs-pre.target"
+      ],
+      "before": [
+        "systemd-quotacheck.service",
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "%i.device"
+      ],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-growfs-root.service",
+      "path": "/usr/lib/systemd/system/systemd-growfs-root.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-repart.service",
+        "systemd-remount-fs.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-growfs@.service",
+      "path": "/usr/lib/systemd/system/systemd-growfs@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-repart.service",
+        "%i.mount"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "%i.mount"
+      ],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-halt.service",
+      "path": "/usr/lib/systemd/system/systemd-halt.service",
+      "requires": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "wants": [],
+      "after": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-hibernate-clear.service",
+      "path": "/usr/lib/systemd/system/systemd-hibernate-clear.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67",
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-hibernate-resume.service",
+      "path": "/usr/lib/systemd/system/systemd-hibernate-resume.service",
+      "requires": [],
+      "wants": [
+        "local-fs-pre.target"
+      ],
+      "after": [],
+      "before": [
+        "local-fs-pre.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionKernelCommandLine=!noresume"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-hibernate.service",
+      "path": "/usr/lib/systemd/system/systemd-hibernate.service",
+      "requires": [
+        "sleep.target"
+      ],
+      "wants": [],
+      "after": [
+        "sleep.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-hostnamed.service",
+      "path": "/usr/lib/systemd/system/systemd-hostnamed.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-hostnamed.socket",
+      "path": "/usr/lib/systemd/system/systemd-hostnamed.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-hybrid-sleep.service",
+      "path": "/usr/lib/systemd/system/systemd-hybrid-sleep.service",
+      "requires": [
+        "sleep.target"
+      ],
+      "wants": [],
+      "after": [
+        "sleep.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-initctl.service",
+      "path": "/usr/lib/systemd/system/systemd-initctl.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-initctl.socket",
+      "path": "/usr/lib/systemd/system/systemd-initctl.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journal-catalog-update.service",
+      "path": "/usr/lib/systemd/system/systemd-journal-catalog-update.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target",
+        "systemd-tmpfiles-setup.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "systemd-update-done.service",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionNeedsUpdate=/var"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journal-flush.service",
+      "path": "/usr/lib/systemd/system/systemd-journal-flush.service",
+      "requires": [],
+      "wants": [
+        "systemd-journald.service"
+      ],
+      "after": [
+        "systemd-remount-fs.service",
+        "systemd-quotacheck-root.service",
+        "systemd-journald.service"
+      ],
+      "before": [
+        "systemd-tmpfiles-setup.service",
+        "soft-reboot.target",
+        "systemd-soft-reboot.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journald-audit.socket",
+      "path": "/usr/lib/systemd/system/systemd-journald-audit.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionSecurity=audit",
+        "ConditionCapability=CAP_AUDIT_READ"
+      ],
+      "wanted_by": [
+        "sockets.target",
+        "systemd-journald.service"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journald-dev-log.socket",
+      "path": "/usr/lib/systemd/system/systemd-journald-dev-log.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journald-sync@.service",
+      "path": "/usr/lib/systemd/system/systemd-journald-sync@.service",
+      "requires": [
+        "systemd-journald@%i.socket",
+        "systemd-journald-varlink@%i.socket"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-journald@%i.socket",
+        "systemd-journald-varlink@%i.socket"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journald-varlink@.socket",
+      "path": "/usr/lib/systemd/system/systemd-journald-varlink@.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journald.service",
+      "path": "/usr/lib/systemd/system/systemd-journald.service",
+      "requires": [
+        "systemd-journald.socket"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-journald.socket",
+        "systemd-journald-dev-log.socket",
+        "systemd-journald-audit.socket",
+        "syslog.socket"
+      ],
+      "before": [
+        "sysinit.target",
+        "soft-reboot.target",
+        "systemd-soft-reboot.service"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journald.socket",
+      "path": "/usr/lib/systemd/system/systemd-journald.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journald@.service",
+      "path": "/usr/lib/systemd/system/systemd-journald@.service",
+      "requires": [
+        "systemd-journald@%i.socket",
+        "systemd-journald-varlink@%i.socket"
+      ],
+      "wants": [],
+      "after": [
+        "systemd-journald@%i.socket",
+        "systemd-journald-varlink@%i.socket"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-journald@.socket",
+      "path": "/usr/lib/systemd/system/systemd-journald@.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sockets.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-kexec.service",
+      "path": "/usr/lib/systemd/system/systemd-kexec.service",
+      "requires": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "wants": [],
+      "after": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-localed.service",
+      "path": "/usr/lib/systemd/system/systemd-localed.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-logind.service",
+      "path": "/usr/lib/systemd/system/systemd-logind.service",
+      "requires": [],
+      "wants": [
+        "user.slice",
+        "modprobe@drm.service",
+        "dbus.socket"
+      ],
+      "after": [
+        "nss-user-lookup.target",
+        "user.slice",
+        "modprobe@drm.service",
+        "dbus.socket"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-machine-id-commit.service",
+      "path": "/usr/lib/systemd/system/systemd-machine-id-commit.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target",
+        "first-boot-complete.target"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=/etc",
+        "ConditionPathIsMountPoint=/etc/machine-id"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-modules-load.service",
+      "path": "/usr/lib/systemd/system/systemd-modules-load.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionCapability=CAP_SYS_MODULE",
+        "ConditionDirectoryNotEmpty=|/lib/modules-load.d",
+        "ConditionDirectoryNotEmpty=|/usr/lib/modules-load.d",
+        "ConditionDirectoryNotEmpty=|/usr/local/lib/modules-load.d",
+        "ConditionDirectoryNotEmpty=|/etc/modules-load.d",
+        "ConditionDirectoryNotEmpty=|/run/modules-load.d",
+        "ConditionKernelCommandLine=|modules-load",
+        "ConditionKernelCommandLine=|modules_load",
+        "ConditionKernelCommandLine=|rd.modules-load",
+        "ConditionKernelCommandLine=|rd.modules_load"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-network-generator.service",
+      "path": "/usr/lib/systemd/system/systemd-network-generator.service",
+      "requires": [],
+      "wants": [
+        "network-pre.target"
+      ],
+      "after": [],
+      "before": [
+        "network-pre.target",
+        "systemd-udevd.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-networkd-persistent-storage.service",
+      "path": "/usr/lib/systemd/system/systemd-networkd-persistent-storage.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-remount-fs.service",
+        "systemd-networkd.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "systemd-networkd.service"
+      ],
+      "conditions": [
+        "ConditionCapability=CAP_NET_ADMIN",
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-networkd-wait-online.service",
+      "path": "/usr/lib/systemd/system/systemd-networkd-wait-online.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-networkd.service"
+      ],
+      "before": [
+        "network-online.target",
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "systemd-networkd.service"
+      ],
+      "conditions": [
+        "ConditionCapability=CAP_NET_ADMIN"
+      ],
+      "wanted_by": [
+        "network-online.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-networkd-wait-online@.service",
+      "path": "/usr/lib/systemd/system/systemd-networkd-wait-online@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-networkd.service"
+      ],
+      "before": [
+        "network-online.target",
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "systemd-networkd.service"
+      ],
+      "conditions": [
+        "ConditionCapability=CAP_NET_ADMIN"
+      ],
+      "wanted_by": [
+        "network-online.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-networkd.service",
+      "path": "/usr/lib/systemd/system/systemd-networkd.service",
+      "requires": [],
+      "wants": [
+        "systemd-networkd.socket",
+        "network.target",
+        "systemd-networkd-persistent-storage.service"
+      ],
+      "after": [
+        "systemd-networkd.socket",
+        "systemd-udevd.service",
+        "network-pre.target",
+        "systemd-sysusers.service",
+        "systemd-sysctl.service"
+      ],
+      "before": [
+        "network.target",
+        "multi-user.target",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionCapability=CAP_NET_ADMIN"
+      ],
+      "wanted_by": [
+        "multi-user.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-networkd.socket",
+      "path": "/usr/lib/systemd/system/systemd-networkd.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionCapability=CAP_NET_ADMIN"
+      ],
+      "wanted_by": [
+        "sockets.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrextend.socket",
+      "path": "/usr/lib/systemd/system/systemd-pcrextend.socket",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "tpm2.target"
+      ],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": [
+        "sockets.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrextend@.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrextend@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "tpm2.target"
+      ],
+      "before": [
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrfs-root.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrfs-root.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "tpm2.target",
+        "systemd-pcrmachine.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrfs@.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrfs@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "%i.mount",
+        "tpm2.target",
+        "systemd-pcrfs-root.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "%i.mount"
+      ],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock-file-system.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock-file-system.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-remount-fs.service",
+        "var.mount"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target",
+        "systemd-pcrlock-make-policy.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock-firmware-code.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock-firmware-code.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-tpm2-setup.service",
+        "systemd-remount-fs.service",
+        "var.mount"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target",
+        "systemd-pcrlock-make-policy.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock-firmware-config.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock-firmware-config.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-tpm2-setup.service",
+        "systemd-remount-fs.service",
+        "var.mount"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target",
+        "systemd-pcrlock-make-policy.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock-machine-id.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock-machine-id.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-remount-fs.service",
+        "var.mount"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target",
+        "systemd-pcrlock-make-policy.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock-make-policy.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock-make-policy.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-tpm2-setup.service",
+        "systemd-remount-fs.service",
+        "var.mount"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock-secureboot-authority.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock-secureboot-authority.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-tpm2-setup.service",
+        "systemd-remount-fs.service",
+        "var.mount"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target",
+        "systemd-pcrlock-make-policy.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock-secureboot-policy.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock-secureboot-policy.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-tpm2-setup.service",
+        "systemd-remount-fs.service",
+        "var.mount"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target",
+        "systemd-pcrlock-make-policy.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock.socket",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock.socket",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "tpm2.target"
+      ],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrlock@.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrlock@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-tpm2-setup.service",
+        "systemd-remount-fs.service",
+        "var.mount"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrmachine.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrmachine.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "tpm2.target"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrphase-initrd.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrphase-initrd.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "tpm2.target"
+      ],
+      "before": [
+        "sysinit.target",
+        "cryptsetup-pre.target",
+        "cryptsetup.target",
+        "shutdown.target",
+        "initrd-switch-root.target",
+        "systemd-sysext.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrphase-sysinit.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrphase-sysinit.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "sysinit.target",
+        "tpm2.target"
+      ],
+      "before": [
+        "basic.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pcrphase.service",
+      "path": "/usr/lib/systemd/system/systemd-pcrphase.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "remote-fs.target",
+        "remote-cryptsetup.target",
+        "tpm2.target"
+      ],
+      "before": [
+        "systemd-user-sessions.service"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release",
+        "ConditionSecurity=measured-uki"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-poweroff.service",
+      "path": "/usr/lib/systemd/system/systemd-poweroff.service",
+      "requires": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "wants": [],
+      "after": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-pstore.service",
+      "path": "/usr/lib/systemd/system/systemd-pstore.service",
+      "requires": [],
+      "wants": [
+        "modprobe@efi_pstore.service"
+      ],
+      "after": [
+        "modprobe@efi_pstore.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionDirectoryNotEmpty=/sys/fs/pstore",
+        "ConditionVirtualization=!container"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-quotacheck-root.service",
+      "path": "/usr/lib/systemd/system/systemd-quotacheck-root.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-remount-fs.service"
+      ],
+      "before": [
+        "local-fs.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-quotacheck@.service",
+      "path": "/usr/lib/systemd/system/systemd-quotacheck@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "%i.mount"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "%i.mount"
+      ],
+      "conditions": [
+        "ConditionPathExists=/usr/sbin/quotacheck",
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-random-seed.service",
+      "path": "/usr/lib/systemd/system/systemd-random-seed.service",
+      "requires": [],
+      "wants": [
+        "first-boot-complete.target"
+      ],
+      "after": [
+        "systemd-remount-fs.service"
+      ],
+      "before": [
+        "first-boot-complete.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionVirtualization=!container",
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-reboot.service",
+      "path": "/usr/lib/systemd/system/systemd-reboot.service",
+      "requires": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "wants": [],
+      "after": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-remount-fs.service",
+      "path": "/usr/lib/systemd/system/systemd-remount-fs.service",
+      "requires": [],
+      "wants": [
+        "local-fs-pre.target"
+      ],
+      "after": [
+        "systemd-fsck-root.service"
+      ],
+      "before": [
+        "local-fs-pre.target",
+        "local-fs.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-rfkill.service",
+      "path": "/usr/lib/systemd/system/systemd-rfkill.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "sys-devices-virtual-misc-rfkill.device"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "sys-devices-virtual-misc-rfkill.device"
+      ],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-rfkill.socket",
+      "path": "/usr/lib/systemd/system/systemd-rfkill.socket",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "sys-devices-virtual-misc-rfkill.device",
+        "systemd-remount-fs.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [
+        "sys-devices-virtual-misc-rfkill.device"
+      ],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-soft-reboot.service",
+      "path": "/usr/lib/systemd/system/systemd-soft-reboot.service",
+      "requires": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "wants": [],
+      "after": [
+        "shutdown.target",
+        "umount.target",
+        "final.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-storagetm.service",
+      "path": "/usr/lib/systemd/system/systemd-storagetm.service",
+      "requires": [],
+      "wants": [
+        "modprobe@nvmet_tcp.service",
+        "modprobe@thunderbolt_net.service",
+        "sys-kernel-config.mount"
+      ],
+      "after": [
+        "modprobe@nvmet_tcp.service",
+        "modprobe@thunderbolt_net.service",
+        "sys-kernel-config.mount",
+        "plymouth-start.service"
+      ],
+      "before": [
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionVirtualization=!container"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-suspend-then-hibernate.service",
+      "path": "/usr/lib/systemd/system/systemd-suspend-then-hibernate.service",
+      "requires": [
+        "sleep.target"
+      ],
+      "wants": [],
+      "after": [
+        "sleep.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-suspend.service",
+      "path": "/usr/lib/systemd/system/systemd-suspend.service",
+      "requires": [
+        "sleep.target"
+      ],
+      "wants": [],
+      "after": [
+        "sleep.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-sysctl.service",
+      "path": "/usr/lib/systemd/system/systemd-sysctl.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-modules-load.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=/proc/sys/net/"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-sysext.service",
+      "path": "/usr/lib/systemd/system/systemd-sysext.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "sysinit.target",
+        "systemd-tmpfiles-setup.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionCapability=CAP_SYS_ADMIN",
+        "ConditionDirectoryNotEmpty=|/etc/extensions",
+        "ConditionDirectoryNotEmpty=|/run/extensions",
+        "ConditionDirectoryNotEmpty=|/var/lib/extensions",
+        "ConditionDirectoryNotEmpty=|/.extra/sysext"
+      ],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-sysext.socket",
+      "path": "/usr/lib/systemd/system/systemd-sysext.socket",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionCapability=CAP_SYS_ADMIN"
+      ],
+      "wanted_by": [
+        "sockets.target"
+      ]
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-sysext@.service",
+      "path": "/usr/lib/systemd/system/systemd-sysext@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-sysusers.service",
+      "path": "/usr/lib/systemd/system/systemd-sysusers.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-remount-fs.service",
+        "systemd-tmpfiles-setup-dev-early.service"
+      ],
+      "before": [
+        "systemd-tmpfiles-setup-dev.service",
+        "sysinit.target",
+        "systemd-update-done.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionNeedsUpdate=|/etc",
+        "ConditionCredential=|sysusers.extra"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-timedated.service",
+      "path": "/usr/lib/systemd/system/systemd-timedated.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-tmpfiles-clean.service",
+      "path": "/usr/lib/systemd/system/systemd-tmpfiles-clean.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target",
+        "time-set.target"
+      ],
+      "before": [
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-tmpfiles-clean.timer",
+      "path": "/usr/lib/systemd/system/systemd-tmpfiles-clean.timer",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-tmpfiles-setup-dev-early.service",
+      "path": "/usr/lib/systemd/system/systemd-tmpfiles-setup-dev-early.service",
+      "requires": [],
+      "wants": [
+        "local-fs-pre.target"
+      ],
+      "after": [],
+      "before": [
+        "sysinit.target",
+        "local-fs-pre.target",
+        "systemd-udevd.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-tmpfiles-setup-dev.service",
+      "path": "/usr/lib/systemd/system/systemd-tmpfiles-setup-dev.service",
+      "requires": [],
+      "wants": [
+        "local-fs-pre.target"
+      ],
+      "after": [
+        "systemd-tmpfiles-setup-dev-early.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "local-fs-pre.target",
+        "systemd-udevd.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-tmpfiles-setup.service",
+      "path": "/usr/lib/systemd/system/systemd-tmpfiles-setup.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target",
+        "systemd-sysusers.service",
+        "systemd-journald.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-tpm2-setup-early.service",
+      "path": "/usr/lib/systemd/system/systemd-tpm2-setup-early.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "tpm2.target",
+        "systemd-pcrphase-initrd.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionSecurity=measured-uki",
+        "ConditionPathExists=!/run/systemd/tpm2-srk-public-key.pem"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-tpm2-setup.service",
+      "path": "/usr/lib/systemd/system/systemd-tpm2-setup.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "tpm2.target",
+        "systemd-tpm2-setup-early.service",
+        "systemd-remount-fs.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionSecurity=measured-uki",
+        "ConditionPathExists=!/etc/initrd-release"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-update-done.service",
+      "path": "/usr/lib/systemd/system/systemd-update-done.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "local-fs.target"
+      ],
+      "before": [
+        "sysinit.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionNeedsUpdate=|/etc",
+        "ConditionNeedsUpdate=|/var"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-user-sessions.service",
+      "path": "/usr/lib/systemd/system/systemd-user-sessions.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "remote-fs.target",
+        "nss-user-lookup.target",
+        "network.target",
+        "home.mount"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "systemd-volatile-root.service",
+      "path": "/usr/lib/systemd/system/systemd-volatile-root.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "sysroot.mount",
+        "sysroot-usr.mount",
+        "systemd-repart.service"
+      ],
+      "before": [
+        "initrd-root-fs.target",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "time-set.target",
+      "path": "/usr/lib/systemd/system/time-set.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "time-sync.target",
+      "path": "/usr/lib/systemd/system/time-sync.target",
+      "requires": [],
+      "wants": [
+        "time-set.target"
+      ],
+      "after": [
+        "time-set.target"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "timers.target",
+      "path": "/usr/lib/systemd/system/timers.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "tpm2.target",
+      "path": "/usr/lib/systemd/system/tpm2.target",
+      "requires": [],
+      "wants": [
+        "dev-tpmrm0.device"
+      ],
+      "after": [
+        "dev-tpmrm0.device"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "umount.target",
+      "path": "/usr/lib/systemd/system/umount.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "usb-gadget.target",
+      "path": "/usr/lib/systemd/system/usb-gadget.target",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "user-runtime-dir@.service",
+      "path": "/usr/lib/systemd/system/user-runtime-dir@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-logind.service",
+        "dbus.service"
+      ],
+      "before": [],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "systemd",
+      "unit": "user@.service",
+      "path": "/usr/lib/systemd/system/user@.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-logind.service",
+        "user-runtime-dir@%i.service",
+        "dbus.service",
+        "systemd-oomd.service"
+      ],
+      "before": [],
+      "binds_to": [
+        "user-runtime-dir@%i.service"
+      ],
+      "conditions": [],
+      "wanted_by": []
+    },
+    {
+      "package": "udev",
+      "unit": "systemd-hwdb-update.service",
+      "path": "/usr/lib/systemd/system/systemd-hwdb-update.service",
+      "requires": [],
+      "wants": [],
+      "after": [
+        "systemd-remount-fs.service"
+      ],
+      "before": [
+        "sysinit.target",
+        "systemd-update-done.service",
+        "shutdown.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionNeedsUpdate=/etc",
+        "ConditionPathExists=|!/usr/lib/udev/hwdb.bin",
+        "ConditionPathExists=|/etc/udev/hwdb.bin",
+        "ConditionDirectoryNotEmpty=|/etc/udev/hwdb.d/"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "udev",
+      "unit": "systemd-udev-load-credentials.service",
+      "path": "/usr/lib/systemd/system/systemd-udev-load-credentials.service",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "systemd-udevd.service",
+        "shutdown.target",
+        "initrd-switch-root.target"
+      ],
+      "binds_to": [],
+      "conditions": [],
+      "wanted_by": [
+        "sysinit.target"
+      ]
+    },
+    {
+      "package": "udev",
+      "unit": "systemd-udev-settle.service",
+      "path": "/usr/lib/systemd/system/systemd-udev-settle.service",
+      "requires": [],
+      "wants": [
+        "systemd-udevd.service"
+      ],
+      "after": [
+        "systemd-udev-trigger.service"
+      ],
+      "before": [
+        "sysinit.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=/sys"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "udev",
+      "unit": "systemd-udev-trigger.service",
+      "path": "/usr/lib/systemd/system/systemd-udev-trigger.service",
+      "requires": [],
+      "wants": [
+        "systemd-udevd.service"
+      ],
+      "after": [
+        "systemd-udevd-kernel.socket",
+        "systemd-udevd-control.socket"
+      ],
+      "before": [
+        "sysinit.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=/sys"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "udev",
+      "unit": "systemd-udevd-control.socket",
+      "path": "/usr/lib/systemd/system/systemd-udevd-control.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=/sys"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "udev",
+      "unit": "systemd-udevd-kernel.socket",
+      "path": "/usr/lib/systemd/system/systemd-udevd-kernel.socket",
+      "requires": [],
+      "wants": [],
+      "after": [],
+      "before": [
+        "sockets.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=/sys"
+      ],
+      "wanted_by": []
+    },
+    {
+      "package": "udev",
+      "unit": "systemd-udevd.service",
+      "path": "/usr/lib/systemd/system/systemd-udevd.service",
+      "requires": [],
+      "wants": [
+        "systemd-udev-load-credentials.service"
+      ],
+      "after": [
+        "systemd-sysusers.service",
+        "systemd-hwdb-update.service"
+      ],
+      "before": [
+        "sysinit.target"
+      ],
+      "binds_to": [],
+      "conditions": [
+        "ConditionPathIsReadWrite=/sys"
+      ],
+      "wanted_by": []
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+#!/bin/sh
+# shellcheck shell=sh
+# postinst: install diversions and activate the hosts-repair service.
+#
+# Two paths are diverted to their .distrib counterparts so that packages
+# installing into the same location do not conflict with this one, and so that
+# callers of these tools are redirected to the no-op replacements this package
+# ships.
+#
+# /usr/sbin/ifreload: libpve-network-perl invokes ifreload -a whenever network
+# configuration is applied through the Proxmox API, and proxmox-ve runs
+# ifreload -V to check the ifupdown2 version before it will apply anything. The
+# replacement is a wrapper, not a no-op: it delegates -V to the real ifupdown2
+# via the .distrib path so the version check passes honestly, and routes -a to
+# ifup-guest-bridges so a network change from the UI brings up the internal
+# guest bridge without touching the container-owned uplink.
+#
+# /usr/sbin/update-initramfs: initramfs-tools is deliberately absent from the
+# installed set because the kernel subtree is stubbed by this package. The
+# diversion exists so that if initramfs-tools is ever installed by an indirect
+# dependency, its update-initramfs does not conflict with the no-op replacement
+# that lives here. This one is a genuine no-op that exits 0: any caller treating
+# a non-zero return as a real failure would abort an operation that otherwise
+# succeeds.
+#
+# /usr/bin/unshare was considered and deliberately omitted. Diverting a core
+# util-linux binary is high-risk and no specific failure mode for unshare has
+# been demonstrated in this image. It remains undiverted until one is identified.
+set -e
+
+case "$1" in
+  configure)
+    dpkg-divert --package pve-container-shim --rename --add \
+      /usr/sbin/ifreload
+    dpkg-divert --package pve-container-shim --rename --add \
+      /usr/sbin/update-initramfs
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

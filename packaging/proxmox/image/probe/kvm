@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+#
+# Probe whether hardware-assisted virtualisation is usable in this container.
+#
+# The shell layer does the cheap checks -- device present, readable, writable --
+# and then hands off to the ioctl helper, which opens the device itself and
+# issues KVM_GET_API_VERSION followed by KVM_CREATE_VM.
+#
+# No file descriptor crosses the process boundary, and that asymmetry with the
+# FUSE probe is deliberate.  mount(2) requires the caller to hold the descriptor
+# because the kernel reads from it, so the FUSE probe has no choice.  /dev/kvm
+# has no such protocol: passing a descriptor number would be cargo, and it would
+# make kvm-probe impossible to invoke in isolation or to self-test.
+#
+# The shell pre-checks catch the common failures without paying Python start-up,
+# and they emit the same contract as the helper, so a caller sees one shape
+# regardless of which layer produced the verdict.
+set -euo pipefail
+
+# shellcheck source=packaging/proxmox/image/lib/probe-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/probe-common.sh"
+
+readonly CAPABILITY="kvm"
+readonly HELPER="/usr/libexec/pve-container-shim/kvm-probe"
+
+main() {
+  if [[ ! -c /dev/kvm ]]; then
+    emit_json "${CAPABILITY}" "absent" "device_absent" \
+      "Device node /dev/kvm is absent." \
+      "--device /dev/kvm"
+    return "${PROBE_ABSENT}"
+  fi
+
+  if [[ ! -r /dev/kvm ]] || [[ ! -w /dev/kvm ]]; then
+    emit_json "${CAPABILITY}" "absent" "device_permission" \
+      "/dev/kvm exists but is not readable and writable by this process." \
+      "--device /dev/kvm and membership of the kvm group"
+    return "${PROBE_ABSENT}"
+  fi
+
+  if [[ ! -x "${HELPER}" ]]; then
+    emit_json "${CAPABILITY}" "indeterminate" "helper_missing" \
+      "The ioctl helper ${HELPER} is absent, so the device could not be exercised." \
+      "reinstall pve-container-shim"
+    return "${PROBE_INDETERMINATE}"
+  fi
+
+  # The helper's exit status becomes this probe's, and its JSON is already in the
+  # shared contract, so it is emitted unchanged rather than re-wrapped.
+  "${HELPER}"
+}
+
+main "$@"

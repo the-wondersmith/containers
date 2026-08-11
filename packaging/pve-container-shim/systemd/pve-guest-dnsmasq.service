@@ -1,0 +1,42 @@
+# DHCP and DNS for guests attached to the container-internal guest bridge.
+#
+# Proxmox VE runs no DHCP server of its own.  On real hardware the guest
+# bridge is enslaved to a physical port and guests are addressed by whatever
+# serves that network.  Inside a container the guest bridge has no member
+# port and reaches the outside through NAT, so nothing upstream ever sees a
+# guest's DHCP request: the guest boots, brings up its NIC, waits out its
+# timeout and appears hung, with nothing in its console naming the cause.
+#
+# The unit is gated on the configuration file rather than masked at run time.
+# The entrypoint writes that file only when the guest_network capability
+# resolves to enabled, so at a privilege tier that cannot create a bridge the
+# file is absent and systemd records this unit as skipped -- inactive, not
+# failed, so it does not show up in the acceptance suite's failed-unit check.
+# A mask would also stop it running, but a mask is a mutation applied from
+# outside while a condition is a property of the unit: `systemctl status`
+# reports which condition failed, so the reason travels with the unit.
+[Unit]
+Description=DHCP and DNS for Proxmox VE guest bridge
+Documentation=file:///usr/share/doc/pve-container-shim
+ConditionPathExists=/run/pve-container/guest-dnsmasq.conf
+Wants=network.target
+After=network.target
+
+[Service]
+Type=simple
+# --keep-in-foreground because systemd supervises this process directly.
+# dnsmasq daemonises by default, which would leave systemd tracking a parent
+# that exits immediately and the real server unsupervised.
+#
+# --conf-file with an explicit path so this instance reads only what the
+# entrypoint generated.  /etc/dnsmasq.conf and /etc/dnsmasq.d are deliberately
+# not consulted: an operator dropping an unrelated fragment there should not
+# be able to silently change what guests are told, and a config this image
+# generates should not depend on files it does not manage.
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/run/pve-container/guest-dnsmasq.conf
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

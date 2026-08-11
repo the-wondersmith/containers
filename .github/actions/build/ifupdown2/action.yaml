@@ -1,0 +1,243 @@
+---
+# Build ifupdown2 from official Proxmox sources and produce a single
+# Architecture: all .deb that is correct for both amd64 and arm64.
+#
+# WHY THIS EXISTS
+# ---------------
+# Proxmox publishes ifupdown2 (3.3.0-1+pmx12) as Architecture: all but only
+# into the binary-amd64 index of download.proxmox.com/debian/pve.  The
+# binary-arm64 index carries no ifupdown2 entry at all.  Because the package
+# is Architecture: all this is a publishing omission, not an architecture
+# limitation.
+#
+# The consequence is subtle and worse than a missing package: on arm64 the
+# dependency still resolves, silently falling back to Debian trixie's
+# ifupdown2 3.0.0-1.3.  This has been empirically confirmed — a Proxmox VE
+# image built natively on arm64 reports Installed: 3.0.0-1.3 from
+# /var/lib/dpkg/status, while the amd64 image carries 3.3.0-1+pmx12.  That
+# is a cross-architecture version divergence wearing the costume of a satisfied
+# dependency, invisible to any check that only asks whether the package installs.
+#
+# Building from official Proxmox sources and publishing one Architecture: all
+# .deb serves BOTH architectures from a single build and restores exact version
+# parity.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SUNSET CONDITION
+# ─────────────────────────────────────────────────────────────────────────────
+# This action exists solely because Proxmox has not published ifupdown2 into
+# binary-arm64.  It is NOT a permanent fixture.  The moment the following
+# command returns success, this action and its publishing path MUST be deleted
+# and the package taken from Proxmox directly:
+#
+#   curl -fsSL \
+#     http://download.proxmox.com/debian/pve/dists/trixie/pve-no-subscription/binary-arm64/Packages.gz \
+#     | gunzip | grep -q '^Package: ifupdown2$'
+#
+# When that check passes: pin the Proxmox version in the image build, remove
+# this action, its workflow, and every reference to it.
+# ─────────────────────────────────────────────────────────────────────────────
+name: build-ifupdown2
+description: >-
+  Build ifupdown2 from official Proxmox sources. Produces a single
+  Architecture: all .deb serving both amd64 and arm64, working around
+  the omission of ifupdown2 from Proxmox's binary-arm64 index.
+
+inputs:
+  ref:
+    required: true
+    description: >-
+      Upstream git tag or commit to build, e.g. debian/3.3.0-1+pmx12. The
+      action hard-fails if the cloned changelog version does not match
+      expected-version, guarding against upstream retagging.
+  expected-version:
+    required: true
+    description: >-
+      The exact Debian version string dpkg-parsechangelog must report from the
+      cloned debian/changelog, e.g. 3.3.0-1+pmx12. Hard-fails on mismatch,
+      naming both values.
+  outdir:
+    required: false
+    default: dist
+    description: >-
+      Directory to write the .deb into. A relative path resolves against
+      GITHUB_WORKSPACE.
+
+outputs:
+  deb-path:
+    description: Absolute path to the produced .deb.
+    value: ${{ steps.collect.outputs.deb-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Clone the source at the pinned ref
+      id: clone
+      shell: bash
+      env:
+        REF: ${{ inputs.ref }}
+        BUILD_ROOT: ${{ runner.temp }}/ifupdown2-pkg
+      run: |
+        set -euo pipefail
+
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -q
+
+        # git is required for the clone below.  dpkg-dev provides
+        # dpkg-parsechangelog, used in the verification step that follows.
+        apt-get install -y --no-install-recommends git dpkg-dev
+
+        build_dir="${BUILD_ROOT}/ifupdown2"
+
+        # The source tree gets its own subdirectory under BUILD_ROOT.  Note the
+        # built .deb does NOT land in BUILD_ROOT: the Makefile runs
+        # dpkg-buildpackage inside a staging directory it creates *within* the
+        # clone, so the output appears beside the Makefile.  The collect step
+        # therefore searches the clone directory, not its parent.
+        rm -rf "${BUILD_ROOT}"
+        mkdir -p "${BUILD_ROOT}"
+
+        # Clone using https:// rather than git:// — both URLs point to the same
+        # upstream Proxmox repository, but git:// (TCP port 9418) is commonly
+        # blocked by corporate firewalls and CI network policies.
+        #
+        # --filter=blob:none (blobless clone) fetches all commits and trees but
+        # defers blob downloads until checkout requests them.  This is efficient,
+        # works for any ref type (tags, branches, commit SHAs), and avoids a
+        # full history clone.
+        #
+        # --recurse-submodules is REQUIRED, not an optimisation.  The upstream
+        # repository is a thin packaging shell: its root holds only Makefile,
+        # debian/ and an ifupdown2/ submodule carrying every line of Python.
+        # A plain clone leaves that directory empty and the build fails with
+        # "pybuild: cannot detect build system", which names neither submodules
+        # nor the missing source.
+        git clone --filter=blob:none --recurse-submodules \
+          https://git.proxmox.com/git/ifupdown2.git \
+          "${build_dir}"
+
+        git -C "${build_dir}" checkout "${REF}"
+
+        # The submodule pointer moves with the ref, so it has to be re-synced
+        # after checkout or the tree still holds whatever the default branch
+        # pointed at.
+        git -C "${build_dir}" submodule update --init --recursive
+
+        commit_sha="$(git -C "${build_dir}" rev-parse HEAD)"
+        echo "ref '${REF}' resolved to commit ${commit_sha}"
+
+        echo "build-dir=${build_dir}" >> "${GITHUB_OUTPUT}"
+        # build-root is where the collect step looks for the .deb.  `make`
+        # leaves it in the clone directory, not the parent, so these are the
+        # same path -- unlike a raw dpkg-buildpackage invocation.
+        echo "build-root=${build_dir}" >> "${GITHUB_OUTPUT}"
+
+    - name: Verify changelog version matches expected-version
+      id: verify
+      shell: bash
+      env:
+        EXPECTED_VERSION: ${{ inputs.expected-version }}
+        BUILD_DIR: ${{ steps.clone.outputs.build-dir }}
+      run: |
+        set -euo pipefail
+
+        changelog="${BUILD_DIR}/debian/changelog"
+        changelog_version="$(dpkg-parsechangelog -l "${changelog}" -S Version)"
+
+        # Guard against upstream retagging: if the tag moves to a different
+        # commit the changelog version will differ from what the caller declared,
+        # which would silently produce the wrong package.
+        if [[ "${changelog_version}" != "${EXPECTED_VERSION}" ]]; then
+          echo "::error::changelog version '${changelog_version}' does not match expected-version '${EXPECTED_VERSION}'"
+          echo "Either the ref has been retagged or the expected-version input is wrong." >&2
+          exit 1
+        fi
+
+        echo "changelog: ${changelog_version} (matches expected-version input)"
+
+    - name: Install build dependencies
+      shell: bash
+      working-directory: ${{ steps.clone.outputs.build-dir }}
+      run: |
+        set -euo pipefail
+
+        export DEBIAN_FRONTEND=noninteractive
+
+        # apt-get build-dep reads Build-Depends directly from the cloned
+        # debian/control rather than maintaining a parallel list here.  That
+        # list would need to be updated whenever the package's build deps change,
+        # whereas this always tracks the authoritative source.  apt-get update
+        # already ran in the clone step; the cache is fresh.
+        apt-get build-dep -y .
+
+    - name: Build the .deb
+      shell: bash
+      working-directory: ${{ steps.clone.outputs.build-dir }}
+      env:
+        EXPECTED_VERSION: ${{ inputs.expected-version }}
+      run: |
+        set -euo pipefail
+
+        # Build through the repository's own Makefile rather than calling
+        # dpkg-buildpackage directly.  Calling it at the repository root cannot
+        # work: the root carries no Python -- only Makefile, debian/ and the
+        # submodule -- so dh --buildsystem=pybuild aborts during clean with
+        # "cannot detect build system", a message naming neither submodules nor
+        # the missing source.
+        #
+        # The Makefile exists precisely to assemble a buildable tree: it copies
+        # the submodule aside, DELETES the submodule's own debian/ directory,
+        # grafts the outer packaging debian/ in its place, and only then runs
+        # dpkg-buildpackage inside that directory.
+        #
+        # The target is named for the .deb rather than `make deb`, because the
+        # deb target also runs lintian.  Lintian is a packaging-quality gate on
+        # upstream's own packaging, not a build step, and letting it fail this
+        # action would make our pipeline hostage to upstream style findings.
+        #
+        # No --host-arch anywhere: the package is Architecture: all, so one build
+        # produces a .deb correct on every architecture.
+        make "ifupdown2_${EXPECTED_VERSION}_all.deb"
+
+    - name: Collect the built .deb
+      id: collect
+      shell: bash
+      env:
+        BUILD_ROOT: ${{ steps.clone.outputs.build-root }}
+        EXPECTED_VERSION: ${{ inputs.expected-version }}
+        OUTDIR: ${{ inputs.outdir }}
+      run: |
+        set -euo pipefail
+
+        case "${OUTDIR}" in
+          /*) outdir="${OUTDIR}" ;;
+          *)  outdir="${GITHUB_WORKSPACE}/${OUTDIR}" ;;
+        esac
+
+        mkdir -p "${outdir}"
+
+        deb_name="ifupdown2_${EXPECTED_VERSION}_all.deb"
+        deb_src="${BUILD_ROOT}/${deb_name}"
+
+        if [[ ! -f "${deb_src}" ]]; then
+          echo "::error::expected package not found: ${deb_src}"
+          ls -la "${BUILD_ROOT}" >&2
+          exit 1
+        fi
+
+        # The entire premise of this action is that one Architecture: all build
+        # serves both amd64 and arm64.  If the built package declares any other
+        # architecture, that premise has broken and the caller must stop rather
+        # than publish a per-arch .deb that would be wrong for the other
+        # architecture.
+        actual_arch="$(dpkg-deb -f "${deb_src}" Architecture)"
+        if [[ "${actual_arch}" != "all" ]]; then
+          echo "::error::built package has Architecture: ${actual_arch}, expected all"
+          echo "The one-build-serves-both-arches premise has broken; do not publish." >&2
+          exit 1
+        fi
+
+        mv "${deb_src}" "${outdir}/${deb_name}"
+
+        echo "deb-path=${outdir}/${deb_name}" >> "${GITHUB_OUTPUT}"
+        echo "::notice::built ${deb_name} (Architecture: all)"

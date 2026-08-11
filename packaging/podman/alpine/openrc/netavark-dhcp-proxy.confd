@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Configuration for /etc/init.d/netavark-dhcp-proxy
 #
 # Extra arguments for `netavark dhcp-proxy`.

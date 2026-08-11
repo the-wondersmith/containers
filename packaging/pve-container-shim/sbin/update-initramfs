@@ -1,0 +1,15 @@
+#!/bin/sh
+# shellcheck shell=sh
+# update-initramfs: no-op replacement installed by pve-container-shim.
+#
+# The real /usr/sbin/update-initramfs is diverted to
+# /usr/sbin/update-initramfs.distrib. initramfs-tools is deliberately absent
+# from this image's installed set because the kernel subtree is stubbed by
+# pve-container-shim; there is no initramfs to build or update. If initramfs-tools
+# is ever pulled in by an indirect dependency, its update-initramfs would arrive
+# at a conflicting path without this diversion. This no-op absorbs all arguments
+# and exits 0 so that any postinst or trigger that calls update-initramfs does
+# not abort the enclosing dpkg transaction. Exiting non-zero would cause dpkg
+# to treat a routine package installation as a failure.
+printf 'update-initramfs: call ignored; container carries no initramfs\n' >&2
+exit 0

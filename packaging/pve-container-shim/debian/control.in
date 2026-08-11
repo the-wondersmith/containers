@@ -1,0 +1,92 @@
+Source: pve-container-shim
+Section: admin
+Priority: optional
+Maintainer: The Wondersmith <the@wondersmith.dev>
+# debhelper >= 13.13 is required, not just compat level 13: earlier versions
+# (bookworm ships 13.11) discover systemd units by scanning only
+# debian/<pkg>/lib/systemd/system, while this package installs to the
+# DEP17-correct usr/lib/systemd/system. On those versions dh_installsystemd
+# silently finds nothing and enables nothing.
+Build-Depends: debhelper-compat (= 13), debhelper (>= 13.13~)
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+# TARGET SUITE: trixie. The debhelper unit-discovery constraint above applies
+# here as well: bookworm's 13.11 would silently skip every unit this package
+# ships, producing a build that succeeds but leaves pve-container-hosts.service
+# un-enabled, which means pmxcfs can start before /etc/hosts is repaired.
+
+# This package contains no compiled code; one build produces a single _all.deb
+# that is correct on both amd64 and arm64. The APT control plane replicates an
+# Architecture: all stanza into every binary-<arch> index automatically, so
+# consumers on both architectures can install from the same .deb with no
+# per-arch build to publish or maintain.
+Package: pve-container-shim
+Architecture: all
+# bash because the runtime helpers are bash scripts; systemd because most of the
+# deviations this package ships are systemd artefacts (unit masks, drop-ins, the
+# pve-container-hosts service, and the pve-guest-dnsmasq service); fuse3 because
+# the lxcfs drop-in calls fusermount3 as its pre-start unmount and fusermount3 is
+# shipped by fuse3. python3 is required by libexec/kvm-probe, the KVM capability
+# probe.
+#
+# Not declared here: dnsmasq-base, ifupdown2, and iproute2. The guest-network
+# helpers use all three, but they are installed by the image build (see
+# packaging/proxmox/Containerfile), not depended on here, because this package
+# is only ever installed into that image and declaring them would imply it is
+# installable standalone, which it is not.
+Depends: ${misc:Depends}, bash, systemd, fuse3, python3
+# Provides is what satisfies the proxmox-default-kernel dependency declared
+# by proxmox-ve. Conflicts is what keeps it satisfied: without Conflicts, apt
+# is free to install the real proxmox-default-kernel alongside this package on
+# a later upgrade -- silently, at some future date, in an image that previously
+# worked -- and pull the kernel subtree this package exists to avoid. There is
+# deliberately no Replaces here: Replaces authorises overwriting files another
+# package owns, and this package owns none of proxmox-default-kernel's files, so
+# a Replaces would be misleading cargo that a future reader would "fix" in the
+# wrong direction.
+#
+# SUNSET CONDITION: proxmox-ve 9.2.0 declares a bare, unversioned
+# Depends: proxmox-default-kernel, which an unversioned Provides would satisfy.
+# The version is stated anyway so the declaration stays honest if upstream ever
+# adds a constraint. If a future proxmox-ve release declares
+# proxmox-default-kernel (>= X), this package must either bump @SHIM_VERSION@
+# deliberately or be removed -- silently continuing to satisfy a versioned
+# dependency while asserting a kernel generation that does not exist would allow
+# proxmox-ve to install cleanly while the actual kernel ABI requirement is unmet,
+# a failure that surfaces only when a Proxmox component tries to load a module.
+Provides: proxmox-default-kernel (= @SHIM_VERSION@)
+Conflicts: proxmox-default-kernel
+Description: Container adaptations for Proxmox VE
+ This package makes a Proxmox VE installation viable inside an OCI container
+ by addressing three categories of mismatch between what Proxmox expects and
+ what a container provides.
+ .
+ Kernel dependency: proxmox-ve declares a hard dependency on
+ proxmox-default-kernel. Inside a container the host kernel is already running
+ and the kernel package's /boot and /usr/lib/modules trees would be inert.
+ This package satisfies the dependency by providing proxmox-default-kernel at
+ a fixed version without pulling any kernel files.
+ .
+  Unit neutralisations: several systemd units assume bare-metal conditions that
+  do not hold inside a container. watchdog-mux.service, kbrequest.target,
+  lxc-net.service, corosync.service, and systemd-networkd-wait-online.service
+  are masked. lxcfs.service and ifupdown2-pre.service are patched via drop-ins:
+  the first to clear the ConditionVirtualization guard that would prevent it
+  from starting under Docker or Podman, the second because its
+  ExecStart=/bin/udevadm settle would block for its full timeout in a container
+  with no udev daemon. networking.service is patched to run
+  ifup-guest-bridges, which brings up only the internal guest bridge this image
+  declares and never touches the container-owned uplink. pve-container-hosts
+  and pve-guest-dnsmasq are units this package ships: the first repairs
+  /etc/hosts before pmxcfs starts, the second serves DHCP on the guest bridge
+  and is gated on a config file the entrypoint writes only when guest
+  networking is enabled.
+  .
+  Tool diversions: /usr/sbin/ifreload is diverted and replaced with a wrapper
+  that delegates -V to the real ifupdown2 (so proxmox-ve's version check passes
+  honestly) and routes -a to ifup-guest-bridges (so applying network changes
+  from the PVE UI affects the guest bridge but not the container-owned uplink).
+  /usr/sbin/update-initramfs is diverted and replaced with a genuine no-op that
+  exits 0, so that any package installing initramfs-tools does not conflict with
+  this one and does not abort an operation that otherwise succeeds.

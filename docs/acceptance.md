@@ -1,6 +1,7 @@
 # Acceptance suite
 
-`.github/scripts/acceptance.sh` is the only thing standing between an upstream tag and a published package. Because
+`.github/scripts/acceptance.sh` is the **podman package's** acceptance suite — the only thing standing between an upstream tag and a published
+package. (The Proxmox VE image has its own behavioural suite; see [Proxmox acceptance](pve-acceptance.md).) Because
 [releases are unattended](releases.md), it tests behavior, not file placement:
 
 - `podman run` (crun + conmon) and `podman run --init` (bundled catatonit)

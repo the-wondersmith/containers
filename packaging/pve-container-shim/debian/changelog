@@ -1,0 +1,35 @@
+pve-container-shim (1.0.0-1) trixie; urgency=medium
+
+  * Initial release.
+  * Provides proxmox-default-kernel at a fixed version so that
+    apt-get install proxmox-ve resolves without pulling the real kernel
+    package and the hundreds of megabytes of /boot and /usr/lib/modules
+    it carries; the host kernel is already running and those trees would
+    be inert.
+  * Neutralises watchdog-mux.service, systemd-networkd-wait-online.service,
+    kbrequest.target, lxc-net.service, and corosync.service by symlinking
+    each to /dev/null under /etc/systemd/system/.
+  * Clears the ConditionVirtualization guard on lxcfs.service and adds a
+    pre-start unmount of /var/lib/lxcfs so that lxcfs runs correctly inside
+    Docker and Podman, where the unguarded unit would otherwise be skipped.
+    Overrides ifupdown2-pre.service's ExecStart, whose /bin/udevadm settle
+    would otherwise block for its full timeout in a container with no udev.
+  * Replaces networking.service's ExecStart with ifup-guest-bridges, which
+    brings up only the internal guest bridge this image declares and leaves
+    the container-owned uplink alone.
+  * Diverts /usr/sbin/ifreload and replaces it with a wrapper that delegates
+    -V to the real ifupdown2 (so proxmox-ve's version check passes) and routes
+    -a to ifup-guest-bridges. Diverts /usr/sbin/update-initramfs and replaces
+    it with a genuine no-op, preventing an initramfs-tools install from
+    conflicting with this package.
+  * Installs pve-container-hosts.service, a oneshot that ensures the node
+    hostname resolves to a non-loopback address in /etc/hosts, which
+    pmxcfs requires; without it, pmxcfs clients fail with
+    "ipcc_send_rec[1] failed: Connection refused", a message that names
+    neither the hostname nor /etc/hosts.
+  * Installs pve-guest-dnsmasq.service, gated on a config file the entrypoint
+    writes only when guest networking is enabled, to serve DHCP on the guest
+    bridge; and a tmpfiles.d fragment creating /run/network so ifupdown2 can
+    take its lock.
+
+ -- The Wondersmith <the@wondersmith.dev>  Fri, 07 Aug 2026 00:00:00 +0000

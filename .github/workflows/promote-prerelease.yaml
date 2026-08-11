@@ -96,6 +96,16 @@ jobs:
             [[ -n "${candidate}" ]] || continue
 
             tag="$(jq -r '.tagName' <<< "${candidate}")"
+
+            # The verify job hardcodes podman's four-leg image/pattern matrix
+            # and runs acceptance.sh; a proxmox prerelease entering this
+            # workflow would fail there in a confusing place rather than here.
+            product="$(.github/scripts/release-identity.sh classify "${tag}")"
+            if [[ "${product}" != "podman" ]]; then
+              echo "::notice::${tag} belongs to ${product}; skipping"
+              continue
+            fi
+
             published="$(date -u -d "$(jq -r '.publishedAt' <<< "${candidate}")" +%s)"
 
             if [[ "${published}" -gt "${cutoff}" ]]; then

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+#
+# Probe whether AppArmor is available for PVE's own LXC guests.
+#
+# lxc-pve confines guests with AppArmor profiles.  Without AppArmor the guests
+# either refuse to start or start unconfined, and which of those happens depends
+# on the LXC configuration rather than on anything observable here -- so this
+# probe reports availability and leaves the consequence to the policy layer.
+#
+# The remedy for an unavailable AppArmor stack is to mount securityfs, NOT to
+# pass --security-opt apparmor=unconfined.  That flag disables confinement for
+# the container itself, which is the opposite of making confinement available to
+# the guests inside it, and reaching for it here would trade a visible
+# degradation for an invisible security regression.
+set -euo pipefail
+
+# shellcheck source=packaging/proxmox/image/lib/probe-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/probe-common.sh"
+
+readonly CAPABILITY="apparmor"
+readonly SECURITYFS="/sys/kernel/security"
+readonly APPARMOR_DIR="${SECURITYFS}/apparmor"
+readonly ENABLED_PARAM="/sys/module/apparmor/parameters/enabled"
+
+main() {
+  # The module parameter is readable even when securityfs is not mounted, so it
+  # is checked first: an explicitly disabled module is a definite answer, while a
+  # missing securityfs is only an unobservable one.
+  if [[ -r "${ENABLED_PARAM}" ]]; then
+    local enabled
+    enabled="$(cat "${ENABLED_PARAM}" 2> /dev/null || echo "")"
+    if [[ "${enabled}" != "Y" ]]; then
+      emit_json "${CAPABILITY}" "absent" "module_disabled" \
+        "The apparmor kernel module reports enabled='${enabled}', so no profiles can be loaded." \
+        "boot the host with apparmor=1 security=apparmor"
+      return "${PROBE_ABSENT}"
+    fi
+  fi
+
+  if [[ ! -d "${SECURITYFS}" ]]; then
+    emit_json "${CAPABILITY}" "indeterminate" "securityfs_absent" \
+      "${SECURITYFS} is not mounted, so AppArmor availability could not be observed from inside the container." \
+      "mount -t securityfs securityfs ${SECURITYFS} (do NOT use --security-opt apparmor=unconfined, which disables confinement rather than enabling it)"
+    return "${PROBE_INDETERMINATE}"
+  fi
+
+  if [[ ! -d "${APPARMOR_DIR}" ]]; then
+    emit_json "${CAPABILITY}" "absent" "apparmor_absent" \
+      "securityfs is mounted but ${APPARMOR_DIR} does not exist, so AppArmor is not active on this host." \
+      "boot the host with apparmor=1 security=apparmor"
+    return "${PROBE_ABSENT}"
+  fi
+
+  if [[ ! -r "${ENABLED_PARAM}" ]]; then
+    emit_json "${CAPABILITY}" "indeterminate" "enabled_param_unreadable" \
+      "${APPARMOR_DIR} exists but ${ENABLED_PARAM} could not be read, so the module state is unknown." \
+      "mount -t securityfs securityfs ${SECURITYFS}"
+    return "${PROBE_INDETERMINATE}"
+  fi
+
+  emit_json "${CAPABILITY}" "present" "enabled" \
+    "AppArmor is enabled and ${APPARMOR_DIR} is visible." \
+    ""
+  return "${PROBE_PRESENT}"
+}
+
+main "$@"

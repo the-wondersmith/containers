@@ -1,0 +1,45 @@
+# Masks for units that must not run inside a container. Each symlink points the
+# unit name at /dev/null under /etc/systemd/system/, which is the mask location
+# for administrator overrides. The unit files themselves live in /usr/lib/systemd
+# and are owned by other packages; shipping a file at the same path would be a
+# dpkg file conflict, so symlinks installed here instead.
+#
+# lxc-net.service: its own guard is ConditionVirtualization=!lxc, which matches
+# only the lxc and lxc-libvirt virtualisation identifiers. Docker and Podman
+# report their virtualisation identifier as docker and podman respectively, so
+# ConditionVirtualization=!lxc evaluates to true inside Docker or Podman and the
+# unit starts. When it does it brings up an lxcbr0 bridge and a dnsmasq instance
+# that depend on iptables NAT the container does not own, causing the unit to
+# fail in a way that can stall other units ordered against network.target.
+#
+# corosync.service: this image is single-node and ships no cluster
+# configuration, so corosync has nothing to join. Started anyway it either
+# fails outright or sits retrying, and it carries a hard
+# Requires=network-online.target, which drags an ordering dependency into the
+# boot for a service that cannot do anything useful here.
+#
+# An earlier revision justified this mask by claiming that masking
+# systemd-networkd-wait-online.service leaves network-online.target permanently
+# unreachable. That is wrong and worth stating plainly: masking a unit whose
+# only job is to DELAY the target makes the target reachable sooner, not never.
+# The mask is still correct, but for the reason above rather than that one.
+#
+# ConditionKernelCommandLine=!nocluster provides no escape either way, because
+# /proc/cmdline inside a container is the host's command line, which is not a
+# lever this image controls.
+dev/null etc/systemd/system/watchdog-mux.service
+dev/null etc/systemd/system/systemd-networkd-wait-online.service
+dev/null etc/systemd/system/kbrequest.target
+dev/null etc/systemd/system/lxc-net.service
+dev/null etc/systemd/system/corosync.service
+
+# The ifupdown2 binary at /usr/share/ifupdown2/ifupdown2 is shared by ifup,
+# ifdown, ifreload and ifquery, and it dispatches on argv[0]: invoked under any
+# other name it prints "error: Unexpected executable." and exits without doing
+# anything.  /usr/sbin/ifreload is diverted to this package's wrapper and the
+# real binary is renamed aside to /usr/sbin/ifreload.distrib -- a name the
+# binary itself rejects.  This link gives the wrapper a path whose basename is
+# ifreload, so `ifreload -V` reaches the real implementation and prints the
+# version line PVE's assert_ifupdown2_installed() parses.  Without it that
+# assertion fails and the whole network-apply path aborts before it starts.
+usr/share/ifupdown2/ifupdown2 usr/libexec/pve-container-shim/ifupdown2/ifreload

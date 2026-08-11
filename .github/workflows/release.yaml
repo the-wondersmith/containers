@@ -65,6 +65,7 @@ on:
         description: Human-readable summary of what triggered this release.
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -111,6 +112,14 @@ jobs:
 
           podman_version="$(jq -er '.podman.version' <<< "${COMPONENTS}")"
 
+          # Product classification is required here: without it, the first
+          # proxmox/* release would become podman's "previous release". That
+          # tag carries no podman manifest, so the download below would either
+          # hard-fail every subsequent podman release, or fall through to the
+          # bootstrap branch and silently reset pkgrel to 1.
+          # softprops/action-gh-release then updates the existing release in
+          # place rather than creating a new one, losing a build silently.
+
           # The previous manifest is an asset on the most recent release,
           # INCLUDING prereleases: two consecutive major bumps must not collide
           # on the same tag.
@@ -140,31 +149,45 @@ jobs:
           # this failure sat behind it. stderr is no longer discarded, so a future
           # failure here says why instead of silently bootstrapping.
           previous_manifest="${RUNNER_TEMP}/previous-manifest.json"
+          previous_tag=""
+          rc=0
           previous_tag="$(
-            gh release list --repo "${GITHUB_REPOSITORY}" \
-              --limit 1 --json tagName --jq '.[0].tagName // ""'
-          )"
+            .github/scripts/release-identity.sh previous podman
+          )" || rc=$?
 
-          if [[ -n "${previous_tag}" ]] && gh release download "${previous_tag}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern manifest.json --output "${previous_manifest}" --clobber; then
-            echo "::notice::previous release: ${previous_tag}"
+          if [[ "${rc}" -eq 0 ]]; then
+            if gh release download "${previous_tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern manifest.json --output "${previous_manifest}" --clobber; then
+              echo "::notice::previous release: ${previous_tag}"
 
-            # Validate rather than trust. A zero-byte or malformed manifest would
-            # otherwise read as version "" and pkgrel 0, which is indistinguishable
-            # from a fresh repository and silently resets the release numbering.
-            if ! jq -e '.pkgrel and .components.podman.version' \
-              "${previous_manifest}" > /dev/null; then
-              echo "::error::${previous_tag} has no usable manifest.json; refusing to guess pkgrel"
-              exit 1
+              # Validate rather than trust. A zero-byte or malformed manifest would
+              # otherwise read as version "" and pkgrel 0, which is indistinguishable
+              # from a fresh repository and silently resets the release numbering.
+              if ! jq -e '.pkgrel and .components.podman.version' \
+                "${previous_manifest}" > /dev/null; then
+                echo "::error::${previous_tag} has no usable manifest.json; refusing to guess pkgrel"
+                exit 1
+              fi
+
+              previous_podman="$(jq -r '.components.podman.version' "${previous_manifest}")"
+              previous_pkgrel="$(jq -r '.pkgrel' "${previous_manifest}")"
+            else
+              echo "::notice::no previous release found; bootstrapping"
+              previous_podman=""
+              previous_pkgrel=0
             fi
-
-            previous_podman="$(jq -r '.components.podman.version' "${previous_manifest}")"
-            previous_pkgrel="$(jq -r '.pkgrel' "${previous_manifest}")"
-          else
+          elif [[ "${rc}" -eq 65 ]]; then
             echo "::notice::no previous release found; bootstrapping"
             previous_podman=""
             previous_pkgrel=0
+          elif [[ "${rc}" -eq 66 ]]; then
+            echo "::error::release list was truncated; a podman release was not found"
+            echo "::error::bootstrapping would silently reset pkgrel to 1; refusing"
+            exit 1
+          else
+            echo "::error::release-identity.sh previous podman failed (exit ${rc})"
+            exit 1
           fi
 
           if [[ "${previous_podman}" != "${podman_version}" ]]; then
@@ -363,6 +386,10 @@ jobs:
           prerelease: ${{ inputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # Only podman claims "latest". A second product's release workflow
+          # must set make_latest: false; upstream-watch.yaml resolves GitHub's
+          # "latest" release to read podman component versions.
+          make_latest: true
           files: |
             dist/manifest.json
             dist/podman-debian-amd64/*.deb

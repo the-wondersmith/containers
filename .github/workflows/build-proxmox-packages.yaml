@@ -1,0 +1,194 @@
+---
+name: Build Proxmox packages
+
+# Builds the two Architecture: all Debian packages the Proxmox VE image needs
+# and uploads them as workflow artifacts. Does not build the image and does not
+# create releases — those are a later phase.
+#
+# Both inputs arrive as explicit version strings rather than being resolved here.
+# The caller decides what to build; this workflow decides how to build it.
+
+on:
+  workflow_call:
+    inputs:
+      shim-version:
+        required: true
+        type: string
+        description: >-
+          Debian version string for pve-container-shim, e.g. 1.0.0-1.
+          Must match the top entry in debian/changelog exactly; the packaging
+          action hard-fails on mismatch.
+      ifupdown2-ref:
+        required: true
+        type: string
+        description: >-
+          Git commit to build ifupdown2 from. The upstream repository
+          publishes no tags at all, so a commit SHA is the only stable pin. Passed
+          to the build action, which hard-fails if the cloned changelog version
+          does not match ifupdown2-version — guard against upstream retagging.
+      ifupdown2-version:
+        required: true
+        type: string
+        description: >-
+          Expected Debian version string for ifupdown2, e.g. 3.3.0-1+pmx12.
+    outputs:
+      shim-artifact:
+        description: Artifact name for the pve-container-shim .deb.
+        value: ${{ jobs.packages.outputs.shim-artifact }}
+      ifupdown2-artifact:
+        description: Artifact name for the ifupdown2 .deb.
+        value: ${{ jobs.packages.outputs.ifupdown2-artifact }}
+  workflow_dispatch:
+    inputs:
+      shim-version:
+        required: true
+        type: string
+        description: >-
+          Debian version string for pve-container-shim, e.g. 1.0.0-1.
+          Must match the top entry in debian/changelog exactly.
+      ifupdown2-ref:
+        required: true
+        type: string
+        description: >-
+          Git commit to build ifupdown2 from; upstream publishes no tags.
+      ifupdown2-version:
+        required: true
+        type: string
+        description: >-
+          Expected Debian version string for ifupdown2, e.g. 3.3.0-1+pmx12.
+          Guards against upstream retagging.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: >-
+    ${{ !(startsWith(github.ref, 'refs/tags/') || github.ref_name == github.event.repository.default_branch) }}
+
+# Read-only throughout. Neither package is published here; the image build
+# workflow consumes these artifacts and owns the publishing step.
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    name: Proxmox packages
+    # Both packages are Architecture: all — one build produces a .deb that is
+    # correct on amd64 and arm64 without per-arch staging. Every other build
+    # workflow in this repo carries an arch matrix; the absence of one here is
+    # deliberate, not an oversight. Adding matrix legs would build the same
+    # package twice and double the build time for identical output.
+    runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+
+    outputs:
+      shim-artifact: ${{ steps.conclude.outputs.shim-artifact }}
+      ifupdown2-artifact: ${{ steps.conclude.outputs.ifupdown2-artifact }}
+
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -q
+
+          # build-essential, debhelper, dpkg-dev, fakeroot: needed by
+          # dpkg-buildpackage for the pve-container-shim build. The shim
+          # packaging action calls dpkg-parsechangelog and dpkg-buildpackage
+          # directly without installing anything, so the toolchain must be
+          # present before the action runs.
+          #
+          # ca-certificates: required for the HTTPS git clone inside the
+          # ifupdown2 build action. That action installs git itself, but it does
+          # not install the CA bundle -- without it, TLS verification fails
+          # silently or loudly depending on git's build config.
+          #
+          # curl: required for tool downloads the container environment may need;
+          # also a transitive dependency of the ca-certificates setup on some
+          # trixie variants.
+          #
+          # git: required by actions/checkout in this container before any action
+          # calls git. The ifupdown2 build action also installs git, but checkout
+          # runs first, so git must be present here.
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl debhelper dpkg-dev fakeroot git
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes; do not leave the token on disk.
+          persist-credentials: false
+
+      - name: Build pve-container-shim
+        id: shim
+        uses: ./.github/actions/package/pve-container-shim/debian
+        with:
+          shim-version: ${{ inputs.shim-version }}
+          outdir: dist
+
+      - name: Build ifupdown2
+        id: ifupdown2
+        uses: ./.github/actions/build/ifupdown2
+        with:
+          ref: ${{ inputs.ifupdown2-ref }}
+          expected-version: ${{ inputs.ifupdown2-version }}
+          outdir: dist
+
+      - name: Assert both packages are Architecture all
+        shell: bash
+        env:
+          SHIM_DEB: ${{ steps.shim.outputs.deb-path }}
+          IFUPDOWN2_DEB: ${{ steps.ifupdown2.outputs.deb-path }}
+        run: |
+          set -euo pipefail
+
+          # Each composite action asserts its own Architecture: all. This step
+          # is the workflow's own contract check: the downstream image build
+          # consumes these artifacts under the assumption that one .deb is
+          # correct for every target architecture. Verifying that assumption
+          # here, before any upload, means a violation stops the workflow with
+          # a clear error rather than propagating into the image build as a
+          # confusing per-arch publish of a package that was supposed to be
+          # universal.
+          rc=0
+          for deb in "${SHIM_DEB}" "${IFUPDOWN2_DEB}"; do
+            arch="$(dpkg-deb -f "${deb}" Architecture)"
+            if [[ "${arch}" != "all" ]]; then
+              echo "::error::${deb}: Architecture is '${arch}', expected 'all'"
+              rc=1
+            fi
+          done
+
+          if [[ "${rc}" -eq 0 ]]; then
+            echo "both packages report Architecture: all"
+          fi
+
+          exit "${rc}"
+
+      - name: Upload pve-container-shim .deb
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: pve-container-shim-deb
+          path: ${{ steps.shim.outputs.deb-path }}
+          # A silently empty artifact would make the image build fail later with
+          # no indication of what went wrong here.
+          if-no-files-found: error
+
+      - name: Upload ifupdown2 .deb
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: ifupdown2-deb
+          path: ${{ steps.ifupdown2.outputs.deb-path }}
+          if-no-files-found: error
+
+      - name: Emit artifact names for workflow outputs
+        id: conclude
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Artifact names are constants; they are emitted here so that
+          # workflow_call callers can reference them without hardcoding the
+          # strings on both sides of the call boundary.
+          echo "shim-artifact=pve-container-shim-deb" >> "${GITHUB_OUTPUT}"
+          echo "ifupdown2-artifact=ifupdown2-deb" >> "${GITHUB_OUTPUT}"

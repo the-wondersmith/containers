@@ -1,0 +1,103 @@
+# packaging/proxmox/slim-paths.txt
+#
+# One path glob per line.  Lines beginning with # and blank lines are ignored.
+# The slimming RUN in the Containerfile processes this file to delete inert
+# content, then runs a dpkg -V coverage assertion to confirm every file dpkg
+# believes is missing is accounted for by a glob here.
+#
+# Criteria for inclusion: the path must be genuinely inert inside an OCI
+# container — i.e., never read by any Proxmox VE component at runtime.
+# Do not add a path without verifying it is absent from the runtime call graph.
+#
+# Paths NOT included and why:
+#
+#   /usr/lib/modules/*   -- NOT included.  After `--no-install-recommends`
+#   /usr/lib/firmware/*     the kernel subtree (proxmox-kernel-*, linux-image-*)
+#                           is never installed, so these directories do not
+#                           exist.  Including them would be a no-op deletion
+#                           that misleadingly implies the kernel was present and
+#                           stripped.  The measurement confirming this:
+#                           `apt-get install -s proxmox-ve --no-install-recommends`
+#                           schedules 371 packages with no kernel image at all.
+#
+# Removing /usr/share/man is safe.  Removing /usr/share/doc is NOT wholly safe,
+# and the exception below is load-bearing.  Lines beginning with ! declare a
+# path the deletion loop must preserve.
+#
+#   !/usr/share/doc/pve-manager  -- Proxmox stores RUNTIME data under this
+#   documentation path, not just documentation.  Two files matter:
+#
+#     trustedkeys.gpg  read at runtime by /usr/bin/sqv, which pveam invokes to
+#                      verify the signature on every appliance index it
+#                      downloads.  Deleting it makes `pveam update` fail
+#                      signature verification for every source, after which
+#                      `pveam download` reports the misleading
+#                      `template: no such template` -- a message naming
+#                      neither the keyring nor this file.  Worse, `pveam
+#                      update` prints its failure and still exits 0, so
+#                      nothing downstream notices.
+#
+#     aplinfo.dat      unpacked only because of the zz-pve-manager-aplinfo
+#                      dpkg path-include in the Containerfile, and it survives
+#                      deletion only because pve-manager's postinst copies it
+#                      to /var/lib/pve-manager/apl-info/ at install time.
+#
+# This was found by the acceptance suite (item 7, LXC lifecycle), not by
+# inspection.  The slimming layer's own dpkg -V assertion did not catch it and
+# could not have: it proves every deletion is declared by a glob here, not that
+# deleting it is safe.  Do not widen /usr/share/doc/* back over pve-manager for
+# image-size reasons.
+#
+# Removing /usr/share/locale/* retains the C/POSIX locale (which lives in
+# glibc and is always present) while discarding message-catalogue translations
+# that no container workload reads.  Proxmox's web interface serves its own
+# i18n data from the pve-i18n package independently of system locale files.
+
+!/usr/share/doc/pve-manager
+/usr/share/doc/*
+/usr/share/man/*
+/usr/share/locale/*
+/var/cache/apt/*
+
+# Every entry below ends in /*: the deletion loop takes the text before the
+# last slash as the directory to descend into, so a bare /usr/share/X11 would
+# resolve to /usr/share and take the whole tree with it.
+#
+# Desktop and media data with no consumer in this image.  Each was checked for
+# a consumer before being listed here, not assumed inert from its name:
+#
+#   /usr/share/X11      keyboard maps.  Only localectl reads them, and that is
+#                       a diagnostic this image never invokes.  QEMU carries no
+#                       reference to the path; guest keyboard handling for VNC
+#                       and SPICE is done from tables compiled into QEMU.
+#   /usr/share/fonts    no binary under /usr/bin or /usr/sbin references it,
+#                       and neither QEMU nor libspice-server does.
+#   /usr/share/mime     shared MIME database, read by desktop file managers.
+#   /usr/share/alsa     ALSA card configuration.  Guest audio is emulated by
+#                       QEMU and does not traverse the host ALSA stack.
+#   gstreamer-1.0       plugin directory pulled in as a transitive dependency;
+#                       nothing in the image links against it.  It is named
+#                       here for the record but not listed below: its path is
+#                       architecture-qualified (/usr/lib/<triplet>/), and the
+#                       deletion loop derives a literal directory from each
+#                       pattern rather than expanding a glob in the middle of
+#                       one, so the entry would silently match nothing.  At
+#                       roughly 600 KB it is not worth teaching the loop a new
+#                       trick for.
+#
+# What is deliberately NOT removed, and why it looks removable:
+#
+#   libgallium-*.so     35 MB, the largest single file in the image and an
+#                       obvious slimming target.  It is load-bearing.
+#                       qemu-system-* lists libgbm.so.1 as NEEDED, libgbm1
+#                       depends on mesa-libgallium, and deleting the library
+#                       breaks QEMU's dynamic linking outright -- the binary
+#                       fails to start, and it fails at guest creation rather
+#                       than at build time, so nothing in the image build would
+#                       have noticed.  A size-driven sweep that matched on
+#                       "mesa" or "gallium" would take it.  Do not.
+
+/usr/share/X11/*
+/usr/share/fonts/*
+/usr/share/mime/*
+/usr/share/alsa/*
