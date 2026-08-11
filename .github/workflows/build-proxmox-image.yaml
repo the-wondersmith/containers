@@ -364,7 +364,15 @@ jobs:
           # Build the --tag flags into an array. mapfile reads alternating
           # `-t` / <value> lines from jq, which avoids the word-splitting that
           # an unquoted $() substitution would require.
-          mapfile -t tag_args < <(jq -r '.tags[] | "-t", .' "${DOCKER_METADATA_OUTPUT_JSON}")
+          #
+          # DOCKER_METADATA_OUTPUT_JSON holds the JSON *document*, not a path to
+          # one. An earlier revision passed it to jq as a filename, so jq tried
+          # to open the entire tag set as a file, reported `Could not open file
+          # {"tags":[...]}` and produced nothing. The array came out empty, the
+          # imagetools call ran with no --tag at all, and buildx refused with
+          # `can't push with no tags specified` -- an error naming the symptom
+          # several steps downstream of the cause. Read it from the variable.
+          mapfile -t tag_args < <(jq -r '.tags[] | "-t", .' <<< "${DOCKER_METADATA_OUTPUT_JSON}")
 
           # The `index:` prefix is MANDATORY. Without it, buildx routes the
           # annotation to `manifest-descriptor:`, attaching it to the per-arch
