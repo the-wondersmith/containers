@@ -192,6 +192,67 @@ jobs:
             echo "available=false" >> "${GITHUB_OUTPUT}"
           fi
 
+      # Diagnostic, not a gate.  On a hosted runner the entrypoint completes
+      # every probe, prints "handing off to /sbin/init", and systemd then exits
+      # 255 immediately.  The one probe result that differs from a local run is
+      # FUSE: locally it resolves present at this tier, here it reports
+      # mount_failed -- so /dev/fuse opens and mount(2) itself is refused
+      # despite --cap-add SYS_ADMIN.  The mechanism that does that on an Ubuntu
+      # host is Docker's default AppArmor profile, which denies mount
+      # unconditionally; a macOS Docker Desktop VM loads no AppArmor at all,
+      # which is why this never appeared locally.
+      #
+      # This step measures that rather than assuming it: it prints the host's
+      # AppArmor state and runs the image's own FUSE probe twice under the
+      # documented reduced-tier flags, once as-is and once with AppArmor
+      # confinement lifted.  If the second succeeds where the first fails, the
+      # cause is named.  Every command is guarded so this reports and never
+      # aborts the job.
+      - name: Diagnose mount refusal
+        shell: bash
+        run: |
+          # GitHub injects -e into the step shell, and `set -uo pipefail` does not
+          # cancel it.  An earlier revision of this step died on the first probe
+          # -- which is expected to exit non-zero -- so the comparison it exists
+          # to make never ran.  Turn it off explicitly: every command here is a
+          # measurement, and a failing measurement is a result, not an error.
+          set +e
+          set -uo pipefail
+
+          echo "--- host AppArmor state ---"
+          cat /sys/module/apparmor/parameters/enabled 2>/dev/null || echo "(no apparmor module parameter)"
+          aa-enabled 2>&1 || true
+          echo "--- docker security options ---"
+          docker info --format '{{.SecurityOptions}}' 2>&1 || true
+
+          flags=(
+            --cgroupns=host
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw
+            --tmpfs /run
+            --tmpfs /run/lock
+            --cap-add SYS_ADMIN
+            --device /dev/fuse
+            --shm-size 256m
+          )
+
+          echo "--- FUSE probe, documented flags ---"
+          docker run --rm "${flags[@]}" \
+            --entrypoint /usr/local/lib/pve/probe/fuse pve-acceptance:local 2>&1
+          echo "exit=$?"
+
+          echo "--- FUSE probe, AppArmor unconfined ---"
+          docker run --rm "${flags[@]}" --security-opt apparmor=unconfined \
+            --entrypoint /usr/local/lib/pve/probe/fuse pve-acceptance:local 2>&1
+          echo "exit=$?"
+
+          echo "--- systemd boot, AppArmor unconfined ---"
+          docker run -d --name aa-probe "${flags[@]}" --security-opt apparmor=unconfined \
+            pve-acceptance:local > /dev/null 2>&1 || true
+          sleep 30
+          docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' aa-probe 2>&1 || true
+          docker exec aa-probe systemctl is-system-running 2>&1 || true
+          docker rm -f aa-probe > /dev/null 2>&1 || true
+
       - name: Run the acceptance suite
         shell: bash
         run: .github/scripts/pve-acceptance.sh
