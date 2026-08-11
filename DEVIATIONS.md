@@ -448,6 +448,40 @@ worse than a collision the operator can see and correct by removing the stanza.
 Acceptance item 17b covers the adoption path by seeding a non-default address
 and asserting the bridge, NAT and DHCP all follow it.
 
+## 23. The documented invocations disable AppArmor confinement
+
+Docker's default `docker-default` profile denies `mount(2)` unconditionally. Holding `CAP_SYS_ADMIN`
+does not change that: the capability decides whether the kernel would permit the call, the profile
+decides whether the call is ever allowed to reach it. Both of the image's mount-dependent paths run
+into it — pmxcfs mounts `/etc/pve`, and systemd mounts filesystems of its own during early boot — so on
+a Docker host with AppArmor loaded the container exits 255 immediately after the entrypoint hands off
+to `/sbin/init`, having printed nothing of systemd's own.
+
+Measured on a GitHub-hosted runner, with the documented flags and again with one flag added:
+
+| invocation | FUSE probe | systemd |
+| --- | --- | --- |
+| documented flags | `mount_failed` | exits 255 |
+| + `--security-opt apparmor=unconfined` | `functional` | reaches `degraded` |
+
+The flag is therefore part of the documented invocation rather than a CI accommodation. `--privileged`
+already implies it, so the LXC tier does not repeat it.
+
+**Why this took so long to surface.** The invocation had only ever been exercised on two runtimes that
+each sidestep the profile for different reasons: the podman host does not apply Docker's profile at all,
+and Docker Desktop runs inside a VM with no AppArmor loaded. Both passed. Docker-on-Linux — the most
+common way anyone would actually run this — was the one target never tested, and it could never have
+worked. The gap was in the documented flag set, not in the runners.
+
+**Functional consequence.** The container runs without AppArmor confinement. That is a real reduction in
+isolation, not a formality: a process that escapes the container's other boundaries is unconstrained by
+policy as well. It is accepted because the alternative is an image that cannot mount its own cluster
+filesystem, and because the same trade is already implicit in the LXC tier's `--privileged`. An operator
+who wants confinement back needs a profile permitting the mounts this image performs; none is shipped,
+because writing one that is correct across two architectures and every PVE component that mounts
+anything is a larger undertaking than it looks, and a profile that is subtly wrong fails in exactly the
+way this section describes.
+
 ## Related
 
 - [Proxmox VE package matrix](docs/pve-package-matrix.md) — the package dispositions these deviations produce, classified by architecture and container hostility

@@ -64,6 +64,16 @@ readonly LXC_TEMPLATE_PREFIX="alpine-3.24-default"
 # uses `docker kill` deliberately, to produce the unclean stop it exists to
 # test recovery from.  Adding it would be inert here and would suggest it had
 # been exercised.
+#
+# --security-opt apparmor=unconfined is here because Docker's default profile
+# denies mount(2) outright, regardless of CAP_SYS_ADMIN.  Measured on a GitHub
+# runner: the FUSE probe reports mount_failed with the profile applied and
+# functional without it, and systemd exits 255 during early boot rather than
+# reaching a target, because it has filesystems of its own to mount.  This did
+# not surface until the suite ran on Docker-on-Linux: the podman host does not
+# apply Docker's profile, and Docker Desktop's VM loads no AppArmor at all, so
+# both passed while the most common deployment target could never have worked.
+# PRIVILEGED_FLAGS does not repeat it -- --privileged already implies it.
 readonly REDUCED_FLAGS=(
   --shm-size 256m
   --cgroupns=host
@@ -72,6 +82,7 @@ readonly REDUCED_FLAGS=(
   --tmpfs /run/lock
   --cap-add SYS_ADMIN
   --device /dev/fuse
+  --security-opt apparmor=unconfined
 )
 
 # Nested LXC guests need more than the reduced or full capability tiers give.

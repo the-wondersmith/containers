@@ -169,6 +169,14 @@ named.
   virtualisation, so `/dev/kvm` does not exist to be passed. The management plane, LXC guests and everything else in
   Tier A work there; KVM guests do not, and the capability probe will say so rather than failing obscurely later. On
   arm64 the requirement is stricter still: see [DEVIATIONS.md](../DEVIATIONS.md) §20.
+- **Room to call `mount(2)`.** Docker's default AppArmor profile denies the mount syscall outright, and holding
+  `CAP_SYS_ADMIN` does not change that — the capability governs whether the kernel would permit the call, the profile
+  governs whether it is ever made. pmxcfs mounts `/etc/pve`, and systemd mounts several filesystems of its own during
+  early boot, so on a Docker host with AppArmor loaded the container exits 255 before reaching any target. The
+  invocations below pass `--security-opt apparmor=unconfined` for that reason; `--privileged` already implies it, so
+  the LXC tier does not repeat it. Hosts where the profile is not applied — podman, or Docker Desktop, whose VM loads
+  no AppArmor at all — do not need the flag, but passing it there is harmless. See [DEVIATIONS.md](../DEVIATIONS.md)
+  §23 for what it costs.
 
 ### Management plane
 
@@ -180,6 +188,7 @@ docker run -d --name pve \
   --tmpfs /run --tmpfs /run/lock \
   --cap-add SYS_ADMIN \
   --device /dev/fuse \
+  --security-opt apparmor=unconfined \
   -p 8006:8006 \
   ghcr.io/the-wondersmith/containers/proxmox:9
 ```
@@ -201,6 +210,7 @@ docker run -d --name pve \
   --tmpfs /run --tmpfs /run/lock \
   --cap-add SYS_ADMIN --cap-add NET_ADMIN \
   --device /dev/fuse \
+  --security-opt apparmor=unconfined \
   --security-opt seccomp=unconfined \
   -p 8006:8006 \
   ghcr.io/the-wondersmith/containers/proxmox:9
