@@ -1,0 +1,377 @@
+# syntax=docker/dockerfile:1
+
+# packaging/proxmox/Containerfile
+#
+# Proxmox VE container image — single file, both architectures.
+# Base: debian:trixie-slim.
+#
+# Why no $TARGETARCH branching anywhere in this file:
+# Every package used here is either Architecture: all or published for both
+# amd64 and arm64 under the same name.  The Proxmox repository's InRelease
+# declares "Architectures: amd64 arm64" and uses the same component/suite for
+# both; the APT source in proxmox.sources does not branch on architecture
+# either.  If you find yourself wanting an arch branch, stop and report why
+# first rather than adding one.
+
+FROM docker.io/library/debian:trixie-slim
+
+# Enable bash and pipefail for all subsequent RUN instructions so that pipes
+# fail immediately on error and bash constructs are available.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# ---------------------------------------------------------------------------
+# ARG: path to the locally-built pve-container-shim deb, relative to the
+# build context (which must be the repository root).
+#
+# Local build: produced by dpkg-buildpackage in packaging/pve-container-shim/
+#   and typically passed as --build-arg SHIM_DEB=path/to/pve-container-shim_<ver>_all.deb
+#   relative to the repository root.
+#
+# CI (Phase 7): arrives as a workflow artifact attached to the build job and
+#   downloaded into the runner workspace before the image build step; the CI
+#   invocation passes --build-arg SHIM_DEB=<artifact-path> automatically.
+# ---------------------------------------------------------------------------
+ARG SHIM_DEB
+
+# ARG SHIM_VERSION: the Debian package version string (e.g. "1.0.0-1"),
+# used to stamp the per-arch config-level OCI label.  Must be passed as
+# --build-arg SHIM_VERSION=<version> at build time.
+#
+# The index-level OCI annotation (org.opencontainers.image.*) is set
+# separately by the CI merge job that combines the per-arch manifests into a
+# multi-arch image index.  This LABEL is the per-arch config-level copy,
+# present in each single-arch image's config object.
+# ARG IFUPDOWN2_DEB: path to the locally-built ifupdown2 deb, relative to the
+# build context, exactly like SHIM_DEB above.
+#
+# Proxmox publishes ifupdown2 3.3.0-1+pmx12 as Architecture: all, but places it
+# in binary-amd64 ONLY.  On arm64 the dependency still resolves -- silently, to
+# Debian trixie's 3.0.0-1.3 -- so the two architectures end up carrying
+# different builds of the same package from different repositories.  That is a
+# cross-architecture divergence wearing the costume of a satisfied dependency,
+# and no check that merely asks "did it install?" would ever see it.
+#
+# It also breaks PVE's own network-apply path.  assert_ifupdown2_installed()
+# in PVE/API2/Network.pm splits the version on dots and dashes and requires the
+# fourth field to match pve|pmx|proxmox.  Debian's 3.0.0-1.3 splits to
+# (3, 0, 0, 1) and fails, so applying a network change from the web UI dies on
+# arm64 even with a perfectly good ifreload.
+#
+# Building it ourselves from git.proxmox.com and installing the same
+# Architecture: all deb on both architectures removes both problems at once.
+# See .github/actions/build/ifupdown2 for the build, and PROVENANCE.md for why
+# this is tier 3 rather than tier 1.
+ARG IFUPDOWN2_DEB
+
+ARG SHIM_VERSION
+
+# Copy the shim deb into the image early so that a missing or mis-named file
+# causes the build to fail fast before the more expensive network operations.
+COPY ${SHIM_DEB} /tmp/pve-container-shim.deb
+COPY ${IFUPDOWN2_DEB} /tmp/ifupdown2.deb
+
+# ---------------------------------------------------------------------------
+# Keyring fetch with checksum assertion.
+#
+# curl and ca-certificates are not present in debian:trixie-slim; they are
+# installed here before use.  The apt lists are removed immediately so they
+# do not contribute stale package index state into the next apt-get update.
+#
+# The sha256 checksum is asserted and the build fails loudly if it does not
+# match.  A silently-changed keyring is a supply-chain event, not a transient
+# fetch failure: the build must print both the expected and actual values so
+# the operator can decide whether the change is a legitimate upstream update or
+# an attack.
+#
+# Expected sha256: 136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45
+# This checksum was independently confirmed against the live file twice.
+# ---------------------------------------------------------------------------
+# hadolint ignore=DL3008,DL3009
+RUN apt-get update -qq \
+  && apt-get install -y --no-install-recommends curl ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL \
+    https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg \
+    -o /usr/share/keyrings/proxmox-archive-keyring.gpg \
+  && expected='136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45' \
+  && actual="$(sha256sum /usr/share/keyrings/proxmox-archive-keyring.gpg)" \
+  && actual="${actual%% *}" \
+  && if [ "${actual}" != "${expected}" ]; then \
+    printf 'KEYRING CHECKSUM MISMATCH\n  expected: %s\n  actual:   %s\n' \
+      "${expected}" "${actual}" >&2; \
+    exit 1; \
+  fi
+
+# APT source for the official Proxmox VE repository, deb822 format.
+# The keyring this references was fetched and checksum-verified in the RUN
+# above.  Signed-By is a path rather than an inline key so that the
+# verification step and the trust decision stay in one place.
+COPY packaging/proxmox/apt/proxmox.sources /etc/apt/sources.list.d/proxmox.sources
+
+# ---------------------------------------------------------------------------
+# Install the shim and Proxmox VE.
+#
+# /usr/sbin/policy-rc.d is created and removed inside this single RUN so it
+# never lands in a layer and never enters dpkg's database.  Packaging it in
+# the shim was considered and rejected: dpkg would then believe
+# /usr/sbin/policy-rc.d exists after the image deletes it, and a later shim
+# reinstall would silently re-block every service start because dpkg would
+# overwrite the deletion with the packaged copy.  A transient RUN-scoped file
+# carries no dpkg record and avoids that trap entirely.
+#
+# --no-install-recommends is not tidiness.  Measured: without it,
+# `apt-get install -s proxmox-ve` schedules 603 packages including a full
+# proxmox-kernel-6.17 image, pve-firmware, and initramfs-tools; with it,
+# 371 packages and no kernel image at all.  Removing this flag silently
+# re-adds hundreds of megabytes of inert kernel that will never run.
+#
+# The storage tooling below is installed explicitly for the same reason, and it
+# is the same trap repeated six times over.  Every PVE storage plugin shells out
+# to the userspace tools of the filesystem or transport it manages, but none of
+# those tools is declared anywhere in the proxmox-ve dependency closure -- the
+# plugins are all shipped inside libpve-storage-perl, which depends on the Perl
+# it needs and not on the binaries it execs.  The failures are identical in
+# shape and equally unhelpful: a bare
+#
+#   exec of mkfs.ext4 ... failed: No such file or directory
+#
+# naming neither the package nor the reason.  e2fsprogs was found the hard way,
+# by the acceptance suite's LXC lifecycle item failing on pct create; the other
+# five are the same class of defect waiting behind XFS, Btrfs, JFS, NFS, CIFS
+# and iSCSI storage respectively.  None of them surfaces until an operator
+# actually configures that storage type, so every check that stops at "the image
+# starts and the API answers" will miss all six.  Do not drop them as apparently
+# redundant.
+
+# pve-edk2-firmware-aarch64 is installed explicitly because qemu-server lists
+# it only under Suggests, so it is not in the proxmox-ve dependency closure on
+# either architecture.  It supplies AAVMF (the arm64 UEFI firmware blobs).
+# Since arm64 guests can only boot UEFI — SeaBIOS has no aarch64 machine type
+# — omitting it silently removes the ability to boot any aarch64 guest.
+# It is Architecture: all, which is why no arch branch is needed here.
+#
+# The shim is installed via `apt-get install ./file.deb` rather than
+# `dpkg -i` because only apt resolves the declared Depends in the control file;
+# dpkg -i unpacks but does not install missing dependencies, leaving the
+# package in a broken half-configured state.
+#
+# The path-include is load-bearing and must not be removed for image-size
+# reasons.  debian:trixie-slim ships /etc/dpkg/dpkg.cfg.d/docker declaring
+# `path-exclude /usr/share/doc/*` with only `*/copyright` re-included, so dpkg
+# never unpacks pve-manager's aplinfo.dat -- the appliance-template index that
+# pveam consumes.  pve-manager's postinst then does a plain cp of that path and
+# aborts the build with:
+#
+#   cp: cannot stat '/usr/share/doc/pve-manager/aplinfo.dat'
+#   dpkg: error processing package pve-manager (--configure)
+#
+# which in turn blocks proxmox-ve.  The message names neither dpkg
+# configuration nor the base image, so the cause is not discoverable from the
+# failure alone.  Re-including only this one directory keeps every other slim
+# exclusion (man, locale, info, lintian) intact.  dpkg reads
+# /etc/dpkg/dpkg.cfg.d/ in lexical order, so a name sorting after "docker" is
+# required for the include to win.  The slimming layer below deletes
+# /usr/share/doc/* afterwards, so the final image is unchanged in that path --
+# the postinst has by then copied aplinfo.dat into /var/lib/pve-manager/,
+# which the slim manifest does not touch.
+# ---------------------------------------------------------------------------
+# The slim manifest is copied before the install step because the deletion
+# loop now runs inside that same layer -- see the block below.
+COPY packaging/proxmox/slim-paths.txt /tmp/slim-paths.txt
+
+# ---------------------------------------------------------------------------
+# Slim the image by removing files that are genuinely inert in a container.
+# The path globs are driven by packaging/proxmox/slim-paths.txt (one glob per
+# line, # comments allowed).
+#
+# dpkg -V assertion: collect paths dpkg believes are missing (output lines
+# whose first whitespace-separated field is exactly "missing") in a snapshot
+# BEFORE the deletion loop and AFTER it, then diff the two with comm -13 to
+# isolate exactly the paths that became newly-missing in this layer.  That
+# delta is what the coverage loop asserts every path in it is covered by a
+# glob in the manifest.  An uncovered path means this layer removed something
+# unintended, which is a build error.  dpkg -V exits non-zero on any
+# discrepancy, so each snapshot is guarded with || true; the comm is not
+# guarded so that a malformed snapshot fails loudly.  Both snapshots use
+# LC_ALL=C sort so comm's collation assumption holds.
+#
+# Blind spot: dpkg -V only verifies files with recorded md5sums — directories,
+# symlinks, and conffiles are invisible to it.  The assertion is
+# one-directional: it catches unaccounted-for removals, it does not validate
+# that every path in the manifest actually existed before deletion.
+#
+# Why before/after delta and not a single post-hoc snapshot: a post-hoc-only
+# snapshot reports ~165 /usr/share/lintian/overrides/ paths and several
+# /usr/share/info/ paths that debian:trixie-slim's own
+# /etc/dpkg/dpkg.cfg.d/docker path-exclude directives prevented dpkg from ever
+# unpacking, plus /var/lib/apt/lists/partial which was removed by the earlier
+# install layer's "rm -rf /var/lib/apt/lists/*" — none of which this layer
+# touched.  The before/after delta is what makes the assertion mean "what this
+# layer removed" rather than "what is absent from the image for any reason".
+# ---------------------------------------------------------------------------
+# hadolint ignore=DL3008,SC2254
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+  && chmod +x /usr/sbin/policy-rc.d \
+  && printf 'path-include /usr/share/doc/pve-manager/*\n' \
+    > /etc/dpkg/dpkg.cfg.d/zz-pve-manager-aplinfo \
+  && apt-get update -qq \
+  && apt-get install -y --no-install-recommends /tmp/pve-container-shim.deb \
+  && apt-get install -y --no-install-recommends /tmp/ifupdown2.deb \
+  && apt-get install -y --no-install-recommends proxmox-ve \
+  && apt-get install -y --no-install-recommends pve-edk2-firmware-aarch64 \
+  # dnsmasq-base rather than dnsmasq: the full package ships its own
+  # system-wide unit and init integration, which would race the unit
+  # pve-container-shim ships for the guest bridge.  The -base package is the
+  # binary only, so the only dnsmasq running is the one this image starts,
+  # reading only the configuration this image generated.
+  && apt-get install -y --no-install-recommends \
+    e2fsprogs xfsprogs btrfs-progs jfsutils \
+    nfs-common cifs-utils open-iscsi \
+    dnsmasq-base \
+  && apt-mark hold proxmox-ve \
+  && rm -f /etc/apt/sources.list.d/pve-enterprise.list \
+    /etc/apt/sources.list.d/pve-enterprise.sources \
+    /etc/apt/sources.list.d/ceph.list \
+    /etc/apt/sources.list.d/ceph.sources \
+  && rm -f /usr/sbin/policy-rc.d \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/* /tmp/pve-container-shim.deb /tmp/ifupdown2.deb \
+  && { \
+    set -euo pipefail; \
+    \
+    # Snapshot missing paths before deletion so the coverage assertion can       \
+    # measure only the delta introduced by this layer.                           \
+    dpkg -V 2> /dev/null | awk '$1 == "missing" { print $NF }' | LC_ALL=C sort > /tmp/.verify-before || true; \
+    \
+    # Delete each path tree listed in the manifest.  Patterns ending with /*  \
+    # are handled by finding all children of the parent directory; patterns     \
+    # without a trailing glob are removed directly.  find -depth ensures        \
+    # directory contents are removed before the directory entries themselves.   \
+    # First pass: collect keep patterns (lines prefixed with !) into the         \
+    # positional parameters as find predicates.  -prune cannot be used here      \
+    # because -delete implies -depth, and -depth silently disables -prune;       \
+    # negated -path tests are the only exclusion mechanism that survives it.     \
+    set --; \
+    while IFS= read -r pattern; do \
+      case "${pattern}" in \
+        '!'*) keep="${pattern#\!}"; set -- "$@" ! -path "${keep}" ! -path "${keep}/*" ;; \
+      esac; \
+    done < /tmp/slim-paths.txt; \
+    \
+    while IFS= read -r pattern; do \
+      case "${pattern}" in \
+        '#'* | '' | '!'*) continue ;; \
+      esac; \
+      dir="${pattern%/*}"; \
+      if [ "${dir}" = "${pattern}" ]; then \
+        rm -rf "${pattern}"; \
+      elif [ -d "${dir}" ]; then \
+        find "${dir}" -mindepth 1 "$@" -delete; \
+      fi; \
+    done < /tmp/slim-paths.txt; \
+    \
+    # Snapshot missing paths after deletion and diff against before to get      \
+    # only the paths that this layer newly removed.                              \
+    dpkg -V 2> /dev/null | awk '$1 == "missing" { print $NF }' | LC_ALL=C sort > /tmp/.verify-after || true; \
+    comm -13 /tmp/.verify-before /tmp/.verify-after > /tmp/.verify-new; \
+    \
+    # dpkg -V coverage assertion: every newly-missing path must be explained    \
+    # by a glob in the manifest.                                                 \
+    uncovered=0; \
+    while IFS= read -r missing_path; do \
+      [ -z "${missing_path}" ] && continue; \
+      covered="false"; \
+      while IFS= read -r pattern; do \
+        # Keep-lines are skipped here as well as in the deletion loop above.    \
+        # A !-prefixed pattern cannot match an absolute path, so leaving it in   \
+        # would be inert rather than wrong -- but a reader comparing the two     \
+        # loops should not have to work that out to satisfy themselves the       \
+        # coverage check and the deletion it verifies read the same manifest.    \
+        case "${pattern}" in \
+          '#'* | '' | '!'*) continue ;; \
+        esac; \
+        # SC2254: unquoted pattern is intentional — case performs glob matching  \
+        # against the slim-paths globs; quoting would force a literal comparison. \
+        # shellcheck disable=SC2254 \
+        case "${missing_path}" in \
+          ${pattern}) covered="true"; break ;; \
+        esac; \
+      done < /tmp/slim-paths.txt; \
+      if [ "${covered}" != "true" ]; then \
+        printf 'UNCOVERED DELETION: %s\n' "${missing_path}" >&2; \
+        uncovered=1; \
+      fi; \
+    done < /tmp/.verify-new; \
+    rm -f /tmp/slim-paths.txt /tmp/.verify-before /tmp/.verify-after /tmp/.verify-new; \
+    [ "${uncovered}" -eq 0 ]; \
+  }
+
+
+# Two cleanups fold into the install layer above.
+#
+# `apt-mark hold proxmox-ve` protects the one invariant this image is built
+# around.  pve-container-shim satisfies proxmox-default-kernel by declaring a
+# Provides and a Conflicts, and an in-container `apt upgrade` is free to
+# resolve that Conflicts the other way -- removing the shim and installing a
+# real kernel into a container that cannot boot one.  The hold makes apt
+# refuse rather than choose.
+#
+# The enterprise and ceph source files are removed because pve-manager's
+# postinst writes them and they point at a subscription-only host.  Left in
+# place, every `apt update` inside the container fails with a 401 against
+# enterprise.proxmox.com and exits non-zero -- which trains an operator to
+# ignore an apt failure, and teaches any script that runs apt here to ignore
+# one too.  The pve-no-subscription source this image installs is unaffected.
+
+# Entrypoint: capability probe + init exec.
+# Copied after the install layer so that edits to entrypoint.sh do not
+# invalidate the expensive package installation layer above.
+COPY --chmod=0755 packaging/proxmox/image/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# The probes and the capability library land under /usr/local/lib/pve/ rather
+# than beside the entrypoint, because each probe is independently invocable --
+# the acceptance suite runs them one at a time to assert the env-var contract,
+# and an operator debugging a degraded start can run a single probe by hand and
+# read its JSON.  Burying them inside the entrypoint would make that impossible.
+#
+# COPY --chmod=0755 on the directory rather than relying on the checked-in mode
+# bits: git records the executable bit, but a build context assembled by any
+# other means may not, and a probe that is not executable reports
+# indeterminate/probe_missing rather than failing loudly.
+COPY --chmod=0755 packaging/proxmox/image/probe/ /usr/local/lib/pve/probe/
+COPY --chmod=0644 packaging/proxmox/image/lib/ /usr/local/lib/pve/lib/
+
+# ---------------------------------------------------------------------------
+# Image metadata.
+# ---------------------------------------------------------------------------
+
+EXPOSE 8006
+
+# SIGRTMIN+3 is the systemd clean-shutdown signal; without it, docker stop
+# sends SIGTERM, which systemd ignores by design.
+STOPSIGNAL SIGRTMIN+3
+
+VOLUME ["/var/lib/vz", "/var/lib/pve-cluster"]
+
+# start-period of 90s: pmxcfs (the Proxmox cluster file system daemon, which
+# runs over FUSE) must initialise and mount /etc/pve/ before pveproxy can
+# generate its certificate and open the HTTPS port.  On a cold start pmxcfs
+# may take 30-60 seconds depending on storage latency; 90s provides headroom
+# without being excessively long.  -k because pveproxy serves a self-signed
+# certificate it generates at first start; curl is confirmed present in the
+# proxmox-ve dependency closure.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+  CMD ["curl", "-fsSk", "https://127.0.0.1:8006/"]
+
+# The index-level annotation (org.opencontainers.image.*) is set separately
+# by the CI merge job that combines the per-arch manifests.  This LABEL is
+# the per-arch config-level copy, present in each single-arch image's config
+# object.
+LABEL org.opencontainers.image.source="https://github.com/the-wondersmith/containers" \
+  org.opencontainers.image.title="Proxmox VE" \
+  org.opencontainers.image.description="Proxmox VE container image with pve-container-shim for OCI compatibility" \
+  org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+  dev.wondersmith.pve.shim-version="${SHIM_VERSION}"
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/sbin/init"]

@@ -1,7 +1,9 @@
 # Declared dependencies
 
-The dependency sets are deliberately opinionated: **no `Recommends`, no `Suggests`**. A package either needs something at runtime, in which
-case it is a hard dependency, or it does not ship as a dependency at all.
+This is the **podman package's** dependency policy. The dependency sets are deliberately opinionated: **no `Recommends`, no `Suggests`**. A
+package either needs something at runtime, in which case it is a hard dependency, or it does not ship as a dependency at all. (The Proxmox VE
+image reasons about upstream `Recommends`/`Suggests` differently — it installs a `Suggests`-only firmware package explicitly, because a
+closure that stops at `Depends` would omit something the image genuinely needs; see [the package matrix](pve-package-matrix.md).)
 
 |                           | Debian `Depends`                  | Alpine `runtime`         |
 |---------------------------|-----------------------------------|--------------------------|

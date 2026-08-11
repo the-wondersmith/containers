@@ -1,0 +1,9 @@
+# kvm-probe is installed without a .py extension (it is an executable, not
+# imported as a module).  Include it explicitly so that `ruff check .` and
+# `ruff format --check .` discover it; without this entry, ruff silently skips
+# any file whose name carries no Python extension.
+include = [
+    "**/*.py",
+    "**/*.pyi",
+    "**/kvm-probe",
+]

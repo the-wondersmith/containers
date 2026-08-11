@@ -1,0 +1,25 @@
+# Proxmox requires the node hostname to resolve to a non-loopback address.
+# When it does not, pmxcfs clients fail at startup with:
+#
+#   ipcc_send_rec[1] failed: Connection refused
+#
+# That message names neither the hostname nor /etc/hosts, which makes the root
+# cause non-obvious. The default /etc/hosts in a freshly assembled container
+# image maps the hostname to 127.0.1.1, which satisfies DNS but is a loopback
+# address and does not satisfy Proxmox's binding requirement. This unit repairs
+# the mapping before pve-cluster.service starts so that the cluster daemon finds
+# the address it needs on its first attempt rather than failing and requiring
+# manual /etc/hosts surgery.
+[Unit]
+Description=Ensure the hostname resolves to a non-loopback address
+Documentation=file:///usr/share/doc/pve-container-shim/README
+After=local-fs.target
+Before=pve-cluster.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/pve-container-shim/ensure-hostname
+
+[Install]
+WantedBy=multi-user.target

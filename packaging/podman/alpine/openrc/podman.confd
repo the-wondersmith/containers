@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Configuration for /etc/init.d/podman
 #
 # See podman-system-service(1) for the service description and options.

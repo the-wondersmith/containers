@@ -1,0 +1,72 @@
+#!/usr/bin/make -f
+# debian/rules — maintainer-script and systemd-unit assembly for pve-container-shim.
+#
+# Nothing is compiled here. All payload files are source files in this
+# repository: systemd drop-ins and masks under systemd/, two service units
+# (pve-container-hosts.service, a oneshot; pve-guest-dnsmasq.service, a
+# Type=simple daemon), three helpers under libexec/ (two POSIX sh, one Python),
+# an ifreload wrapper and a no-op update-initramfs under sbin/, and a tmpfiles.d
+# fragment. debhelper installs them according to debian/install and debian/links.
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+# There is nothing to configure, compile, or test.
+override_dh_auto_configure:
+
+override_dh_auto_build:
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+
+# No sysvinit scripts are shipped; suppress the init helper entirely rather
+# than letting it emit a warning about finding nothing to install.
+override_dh_installinit:
+
+# The two invocations below MUST NOT overlap, and the -X exclusion is what
+# guarantees that. An earlier version of a similar rules file ran a catch-all
+# --no-enable --no-start pass over every unit and then a second named pass for
+# the unit that should be enabled, on the assumption that the later snippet
+# would win. It does not, and the failure is silent:
+#
+#   the --no-enable snippet is guarded by `deb-systemd-helper debian-installed`,
+#   which is false on a first install, so it falls through to `update-state`.
+#   That records the unit as not-enabled. The enable snippet that follows tests
+#   `deb-systemd-helper --quiet was-enabled`, which now returns false because
+#   update-state just marked it so, and takes the else branch -- calling
+#   update-state again. Net effect: nothing is ever enabled, no symlink is
+#   created, and the build succeeds without complaint.
+#
+# The correct order is: named units first, catch-all with -X exclusions last.
+# The catch-all must exclude every unit handled by an earlier named pass,
+# because a unit that appears in both passes is processed twice and the
+# not-enabled record written by the catch-all's update-state call overwrites
+# the symlink the named pass already created.
+#
+# Verified by building the package and inspecting the generated postinst plus
+# the symlinks under /etc/systemd/system after a real install.
+override_dh_installsystemd:
+	# Enable pve-container-hosts.service so it runs on every boot, but do
+	# not attempt to start it at install time: it calls hostname and ip, which
+	# behave correctly in a running container but may not be reliable during a
+	# dpkg run inside a build environment.
+	dh_installsystemd --no-start pve-container-hosts.service
+	# Same treatment for pve-guest-dnsmasq.service.  It has to be enabled or
+	# nothing pulls it in at multi-user.target and it is never evaluated at
+	# all -- which is not the same as its ConditionPathExists failing, though
+	# `systemctl show` reports ConditionResult=no for both, so the two are
+	# indistinguishable from the outside.  An earlier revision shipped this
+	# unit without naming it here: the configuration file was written, the
+	# start-up line claimed DHCP was configured, and no dnsmasq ever ran.
+	dh_installsystemd --no-start pve-guest-dnsmasq.service
+	# Everything else: tracked for maintainer-script cleanup purposes but
+	# neither enabled nor started. The drop-ins and masks ship as plain files
+	# and symlinks respectively; this pass ensures any future unit added to the
+	# package receives correct prerm/postrm bookkeeping rather than being
+	# silently ignored.
+	dh_installsystemd --no-enable --no-start \
+		-Xpve-container-hosts.service \
+		-Xpve-guest-dnsmasq.service

@@ -29,6 +29,17 @@ future change knows what it is about to break.
 - **[Package signing](signing.md)** — why nothing here is signed, and what is relied on instead.
 - **[CI security posture](ci-security.md)** — the trust list, token handling, and the auto-merge gates.
 
+## Proxmox VE image
+
+- **[Proxmox acceptance suite](pve-acceptance.md)** — what the image is gated on, why several assertions are shaped the way they are,
+  and the defects running it found.
+- **[Image guide](pve-image.md)** — the environment-variable contract, runtime requirements, recommended invocations, and per-architecture
+  limitations.
+- **[Package matrix](pve-package-matrix.md)** — the resolved `proxmox-ve` dependency closure, classified by architecture and container
+  hostility, with the disposition of every package.
+- **[Deviations](../DEVIATIONS.md)** — every stub, neutralised unit, dropped package, and workaround, each with its functional consequence.
+- **[Provenance](../PROVENANCE.md)** — every package source mapped to a permitted tier, with justification for anything outside tiers 1 and 2.
+
 ## Contributing
 
 - **[Repository layout](repository-layout.md)** — directory map and what each workflow is for.

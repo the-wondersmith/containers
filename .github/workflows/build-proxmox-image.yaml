@@ -1,0 +1,436 @@
+---
+name: Build Proxmox image
+
+# Builds the multi-arch OCI image for Proxmox VE containers and pushes it to
+# GHCR as a merged manifest list. The package build is delegated to
+# build-proxmox-packages.yaml; this workflow handles the image build, per-arch
+# attestation, manifest merge, index attestation, and tag set.
+#
+# Set push=false (the default) to validate the build without writing to the
+# registry. Set push=true to publish: the image is pushed by digest, attested
+# per arch, and merged into a multi-arch index with the full tag set applied.
+
+on:
+  workflow_call:
+    inputs:
+      shim-version:
+        required: true
+        type: string
+        description: >-
+          Debian version string for pve-container-shim, e.g. 1.0.0-1. Passed
+          through to the packages workflow and embedded as an OCI annotation on
+          the final index so the shim version is recoverable from the image.
+      ifupdown2-ref:
+        required: true
+        type: string
+        description: >-
+          Git commit to build ifupdown2 from; upstream publishes no tags. Passed
+          through to the packages workflow unchanged.
+      ifupdown2-version:
+        required: true
+        type: string
+        description: >-
+          Expected Debian version string for ifupdown2, e.g. 3.3.0-1+pmx12.
+          Passed through to the packages workflow unchanged.
+      image-version:
+        required: true
+        type: string
+        description: >-
+          Resolved proxmox-ve version, e.g. 9.2.9. Used as the base for the
+          image tag set and for computing the major.minor and major aliases.
+      pkgrel:
+        required: false
+        type: string
+        default: "1"
+        description: >-
+          Rebuild counter. Resets to 1 when image-version advances and
+          increments otherwise, so a packaging-only change yields a distinct,
+          addressable tag without altering the upstream version component.
+      push:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          When false (the default), build only -- no registry writes, no
+          attestations, no manifest merge. Set to true to publish.
+  workflow_dispatch:
+    inputs:
+      shim-version:
+        required: true
+        type: string
+        description: Debian version string for pve-container-shim, e.g. 1.0.0-1.
+      ifupdown2-ref:
+        required: true
+        type: string
+        description: Git commit to build ifupdown2 from; upstream publishes no tags.
+      ifupdown2-version:
+        required: true
+        type: string
+        description: Expected Debian version string for ifupdown2, e.g. 3.3.0-1+pmx12.
+      image-version:
+        required: true
+        type: string
+        description: Resolved proxmox-ve version, e.g. 9.2.9.
+      pkgrel:
+        required: false
+        type: string
+        default: "1"
+        description: Rebuild counter. Increments on packaging-only changes.
+      push:
+        required: false
+        type: boolean
+        default: false
+        description: When false, build only. Set to true to push and attest.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: >-
+    ${{ !(startsWith(github.ref, 'refs/tags/') || github.ref_name == github.event.repository.default_branch) }}
+
+# Read-only by default. `packages: write`, `id-token: write`, and
+# `attestations: write` are granted per job, only to the two jobs that
+# actually write to the registry.
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Build the two Architecture: all .deb packages the image needs. Produces
+  # artifacts `pve-container-shim-deb` and `ifupdown2-deb`.
+  # ─────────────────────────────────────────────────────────────────────────────
+  packages:
+    uses: ./.github/workflows/build-proxmox-packages.yaml
+    with:
+      shim-version: ${{ inputs.shim-version }}
+      ifupdown2-ref: ${{ inputs.ifupdown2-ref }}
+      ifupdown2-version: ${{ inputs.ifupdown2-version }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Build one per-arch image leg. When push=true, each leg pushes by digest
+  # (no tag yet), uploads its digest, and attests its own provenance. When
+  # push=false, the image is built locally and discarded -- registry state is
+  # never touched.
+  # ─────────────────────────────────────────────────────────────────────────────
+  build:
+    needs: packages
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    name: image / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # `arch` MUST be a real matrix dimension, not something contributed only
+        # by `include`. An `include` entry that does not overwrite an original
+        # matrix value is applied to *every* combination, so listing the two
+        # arches in `include` alone produces one job rather than two -- both
+        # entries apply to the single empty combination, and the second entry
+        # overwrites the first, leaving everything on arm64. Nothing fails
+        # loudly; the amd64 image simply never builds. The merge job then
+        # pushes a manifest list that claims amd64 but contains only arm64
+        # layers.
+        arch: [amd64, arm64]
+        # Now that `arch` is an original dimension, these attach the right
+        # runner to each combination that already matches on that arch value.
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git; do not leave the token on disk.
+          persist-credentials: false
+
+      # Each artifact lands in its own directory. Merging them into one would
+      # break the exactly-one-.deb assertion below, which is what catches an
+      # empty or misnamed artifact before its absence turns into an opaque
+      # failure inside the Containerfile.
+      - name: Download pve-container-shim .deb
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          name: pve-container-shim-deb
+          path: dist/shim/
+
+      - name: Download ifupdown2 .deb
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          name: ifupdown2-deb
+          path: dist/ifupdown2/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to GHCR
+        if: inputs.push
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve .deb paths
+        id: deb-paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Hard-fail on zero or more than one match. Zero means the artifact
+          # was empty or misnamed; more than one means the download merged
+          # artifacts it should not have. Either case would pass the wrong file
+          # to the build arg, silently corrupt the image, or fail opaquely
+          # inside the Containerfile rather than here with a clear error.
+          resolve() {
+            local name="$1" dir="$2"
+            local -a debs=()
+
+            mapfile -d '' debs < <(find "${dir}" -maxdepth 1 -name '*.deb' -print0)
+
+            if (( ${#debs[@]} == 0 )); then
+              echo "::error::no .deb found in ${dir} -- was the ${name} artifact empty?"
+              exit 1
+            fi
+
+            if (( ${#debs[@]} > 1 )); then
+              echo "::error::expected exactly one .deb in ${dir}, found ${#debs[@]}: ${debs[*]}"
+              exit 1
+            fi
+
+            echo "${name}=${debs[0]}" >> "${GITHUB_OUTPUT}"
+            echo "${name}: ${debs[0]}"
+          }
+
+          resolve shim dist/shim
+          resolve ifupdown2 dist/ifupdown2
+
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          file: packaging/proxmox/Containerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            SHIM_DEB=${{ steps.deb-paths.outputs.shim }}
+            SHIM_VERSION=${{ inputs.shim-version }}
+            IFUPDOWN2_DEB=${{ steps.deb-paths.outputs.ifupdown2 }}
+          # provenance: false because we attest with attest-build-provenance
+          # below, not via buildkit's inline mechanism. buildkit's inline
+          # provenance embeds the attestation in a separate manifest and does
+          # not carry the reusable-workflow signer identity; the explicit
+          # attestation does. Leaving both active would push duplicate,
+          # mismatched attestation manifests for the same digest.
+          provenance: false
+          outputs: >-
+            ${{ inputs.push && format('type=image,name=ghcr.io/{0}/proxmox,push-by-digest=true,name-canonical=true,push=true', github.repository) || 'type=docker' }}
+          cache-from: type=gha,scope=proxmox-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=proxmox-${{ matrix.arch }}
+
+      - name: Attest build provenance
+        if: inputs.push
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/proxmox
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Export digest for merge
+        if: inputs.push
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          digest_dir="${RUNNER_TEMP}/digests"
+          mkdir -p "${digest_dir}"
+
+          # The filename IS the digest (hex only; `sha256:` prefix stripped).
+          # The merge job reconstructs the full reference by prepending
+          # `sha256:` to each basename it finds. Using the filename avoids a
+          # separate metadata file and makes the artifact self-describing.
+          touch "${digest_dir}/${DIGEST#sha256:}"
+
+      - name: Upload digest artifact
+        if: inputs.push
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Merge the two per-arch digests into a single OCI image index, apply the
+  # full tag set, add the shim-version annotation, and attest the index.
+  # Skipped entirely when push=false.
+  # ─────────────────────────────────────────────────────────────────────────────
+  merge:
+    needs: build
+    if: inputs.push
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    runs-on: ubuntu-latest
+
+    env:
+      # Tells docker/metadata-action to emit annotations at the index level
+      # rather than on individual manifest descriptors.
+      DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+
+    steps:
+      - name: Download digest artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute semver aliases
+        id: version
+        shell: bash
+        env:
+          IMAGE_VERSION: ${{ inputs.image-version }}
+        run: |
+          set -euo pipefail
+
+          # Extract major.minor and major for the mutable convenience aliases.
+          # For 9.2.9: major_minor=9.2, major=9.
+          major_minor="${IMAGE_VERSION%.*}"
+          major="${IMAGE_VERSION%%.*}"
+
+          echo "major_minor=${major_minor}" >> "${GITHUB_OUTPUT}"
+          echo "major=${major}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+        with:
+          images: ghcr.io/${{ github.repository }}/proxmox
+          # ${{ inputs.image-version }}-${{ inputs.pkgrel }} is the IMMUTABLE primary tag:
+          # it encodes both the upstream proxmox-ve version and the rebuild
+          # counter, so a packaging-only re-run increments only pkgrel and
+          # yields a distinct, addressable image. Production deployments must
+          # pin to this form. The remaining tags are mutable aliases updated on
+          # every release and must never be used as pins.
+          tags: |
+            type=raw,value=${{ inputs.image-version }}-${{ inputs.pkgrel }}
+            type=raw,value=${{ inputs.image-version }}
+            type=raw,value=${{ steps.version.outputs.major_minor }}
+            type=raw,value=${{ steps.version.outputs.major }}
+            type=raw,value=latest
+
+      - name: Create and push multi-arch manifest
+        shell: bash
+        env:
+          DIGESTS_DIR: ${{ runner.temp }}/digests
+          SHIM_VERSION: ${{ inputs.shim-version }}
+          IMAGE_REPO: ghcr.io/${{ github.repository }}/proxmox
+        run: |
+          set -euo pipefail
+
+          # Reconstruct full digest references from the filenames written by
+          # the per-arch build legs (each filename is the hex digest, with the
+          # `sha256:` prefix stripped).
+          digest_refs=()
+          for f in "${DIGESTS_DIR}"/*; do
+            digest_refs+=("${IMAGE_REPO}@sha256:$(basename "${f}")")
+          done
+
+          # Build the --tag flags into an array. mapfile reads alternating
+          # `-t` / <value> lines from jq, which avoids the word-splitting that
+          # an unquoted $() substitution would require.
+          mapfile -t tag_args < <(jq -r '.tags[] | "-t", .' "${DOCKER_METADATA_OUTPUT_JSON}")
+
+          # The `index:` prefix is MANDATORY. Without it, buildx routes the
+          # annotation to `manifest-descriptor:`, attaching it to the per-arch
+          # manifest entries rather than to the OCI image index -- the
+          # annotation is then invisible when inspecting the merged index.
+          # See docker/buildx#2153.
+          docker buildx imagetools create \
+            "${tag_args[@]}" \
+            --annotation "index:dev.wondersmith.pve.shim-version=${SHIM_VERSION}" \
+            "${digest_refs[@]}"
+
+      - name: Assert manifest structure
+        shell: bash
+        env:
+          PRIMARY_TAG: ghcr.io/${{ github.repository }}/proxmox:${{ inputs.image-version }}-${{ inputs.pkgrel }}
+          SHIM_VERSION: ${{ inputs.shim-version }}
+        run: |
+          set -euo pipefail
+
+          # --raw is MANDATORY. docker buildx imagetools inspect in pretty-print
+          # mode silently omits index-level annotations from its output
+          # (docker/buildx#2153). Only --raw returns the full OCI JSON with
+          # the index annotations intact.
+          raw="$(docker buildx imagetools inspect --raw "${PRIMARY_TAG}")"
+
+          # 1. Assert both architectures are present in the manifest list.
+          actual="$(jq -c '.manifests | map(.platform.architecture) | sort' <<< "${raw}")"
+          expected='["amd64","arm64"]'
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::expected architectures ${expected}, got ${actual}"
+            exit 1
+          fi
+          echo "architectures OK: ${actual}"
+
+          # 2. Assert the shim-version annotation survived the push.
+          actual_shim="$(jq -r '.annotations["dev.wondersmith.pve.shim-version"]' <<< "${raw}")"
+          if [[ "${actual_shim}" != "${SHIM_VERSION}" ]]; then
+            echo "::error::shim-version annotation: expected '${SHIM_VERSION}', got '${actual_shim}'"
+            exit 1
+          fi
+          echo "shim-version annotation OK: ${actual_shim}"
+
+          # 3. Assert the index mediaType is an OCI image index.
+          media_type="$(jq -r '.mediaType' <<< "${raw}")"
+          if [[ "${media_type}" != "application/vnd.oci.image.index.v1+json" ]]; then
+            echo "::error::unexpected mediaType '${media_type}'; expected OCI image index"
+            exit 1
+          fi
+          echo "mediaType OK: ${media_type}"
+
+      - name: Resolve index digest
+        id: index-digest
+        shell: bash
+        env:
+          PRIMARY_TAG: ghcr.io/${{ github.repository }}/proxmox:${{ inputs.image-version }}-${{ inputs.pkgrel }}
+        run: |
+          set -euo pipefail
+          # Derive the digest from the raw index bytes rather than asking
+          # buildx for it.  There is no top-level .Digest field -- the field is
+          # .Manifest.Digest -- and docker/buildx#1175 means a --format template
+          # naming it is ignored entirely, printing the pretty-print output
+          # instead.  That failure is silent: the attestation subject would be a
+          # human-readable blob rather than a digest, and nothing downstream
+          # would notice.  A digest is by definition the sha256 of the bytes it
+          # names, so hashing --raw output cannot drift with a field rename.
+          digest="sha256:$(docker buildx imagetools inspect --raw "${PRIMARY_TAG}" | sha256sum | cut -d' ' -f1)"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest index provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+        with:
+          subject-name: ghcr.io/${{ github.repository }}/proxmox
+          subject-digest: ${{ steps.index-digest.outputs.digest }}
+          push-to-registry: true

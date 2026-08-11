@@ -20,6 +20,11 @@ ignore: |
   .melange-build/
   .melange-workspace/
   src/
+  # Third-party reference material kept only for behavioural comparison. It is
+  # gitignored, never built, and written to a different house style; linting it
+  # reports on someone else's choices. lint:shell and lint:containerfile prune
+  # it for the same reason.
+  dockurr/
 
 rules:
   # GitHub Actions workflows use `on:` as a mapping key, which yamllint would

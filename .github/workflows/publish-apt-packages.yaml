@@ -88,13 +88,24 @@ jobs:
           #     set leaves the repository inconsistent for half its users. Checked
           #     here by name, which is sound because dpkg puts the architecture in
           #     the filename.
-          for arch in amd64 arm64; do
-            if ! printf '%s\n' "${debs[@]}" | grep -q "_${arch}\.deb$"; then
-              echo "::error::${TAG} has no ${arch} .deb; both amd64 and arm64 are required"
-              printf '  %s\n' "${debs[@]}" >&2
-              exit 1
-            fi
-          done
+          #
+          #     The `all` branch is not a loophole. An Architecture: all package is
+          #     one build that is correct on every architecture, and the control
+          #     plane emits its stanza into every binary-<arch> index, so a single
+          #     _all.deb satisfies both users. Requiring per-arch files as well
+          #     would demand builds that cannot exist.
+          if printf '%s\n' "${debs[@]}" | grep -q '_all\.deb$'; then
+            echo "architecture floor satisfied by an Architecture: all package"
+          else
+            for arch in amd64 arm64; do
+              if ! printf '%s\n' "${debs[@]}" | grep -q "_${arch}\.deb$"; then
+                echo "::error::${TAG} has no ${arch} .deb and no _all.deb"
+                echo "::error::publish either an Architecture: all package or both architectures"
+                printf '  %s\n' "${debs[@]}" >&2
+                exit 1
+              fi
+            done
+          fi
 
           # (3) manifest.json is this repository's own release contract: the
           #     upstream watcher diffs against it and the identity job reads
@@ -127,7 +138,7 @@ jobs:
             echo "attested: ${deb##*/}"
           done < <(find preflight -type f -name '*.deb')
 
-          echo "preflight passed: ${#debs[@]} .deb assets, both architectures, all attested"
+          echo "preflight passed: ${#debs[@]} .deb assets, architecture floor met, all attested"
 
       - name: Notify the APT control plane
         uses: ./.github/actions/apt-dispatch

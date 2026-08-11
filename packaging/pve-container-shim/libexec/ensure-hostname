@@ -1,0 +1,71 @@
+#!/bin/sh
+# shellcheck shell=sh
+# ensure-hostname: guarantee the node hostname resolves to a non-loopback address.
+#
+# Proxmox's pmxcfs binds to the address its hostname resolves to. If that
+# address is a loopback (127.x.x.x), pmxcfs fails with
+# "ipcc_send_rec[1] failed: Connection refused", a message that names neither
+# the hostname nor /etc/hosts. This script is called by pve-container-hosts.service
+# before pve-cluster.service starts, so the mapping is correct on the first
+# attempt rather than requiring post-failure operator intervention.
+set -eu
+
+# Resolve the hostname. Fall back to reading /etc/hostname directly if the
+# hostname command is absent (some minimal images omit it).
+if command -v hostname > /dev/null 2>&1; then
+  host="$(hostname)"
+else
+  host="$(cat /etc/hostname)"
+fi
+
+if [ -z "${host}" ]; then
+  printf 'ensure-hostname: could not determine hostname\n' >&2
+  exit 1
+fi
+
+# Determine the container's primary non-loopback IPv4 address. The preferred
+# method asks the kernel which source address it would use to reach 1.1.1.1;
+# this is the routing decision without sending any traffic and is reliable even
+# on containers with multiple interfaces. The fallback scans all addresses and
+# takes the first one that is not in 127.0.0.0/8.
+addr=""
+
+if command -v ip > /dev/null 2>&1; then
+  addr="$(ip -4 -o route get 1.1.1.1 2> /dev/null \
+    | sed -n 's/.*src \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' \
+    | head -n1)"
+
+  if [ -z "${addr}" ]; then
+    addr="$(ip -4 -o addr show 2> /dev/null \
+      | awk '{print $4}' \
+      | cut -d/ -f1 \
+      | grep -v '^127\.' \
+      | head -n1)"
+  fi
+fi
+
+if [ -z "${addr}" ]; then
+  printf 'ensure-hostname: could not determine a non-loopback IPv4 address for hostname "%s"\n' \
+    "${host}" >&2
+  exit 1
+fi
+
+# Check whether /etc/hosts already maps the hostname to this address. If it
+# does, the unit is already satisfied; exit 0 without touching the file. The
+# unit carries RemainAfterExit=yes so it may be restarted; idempotence prevents
+# duplicate lines from accumulating across restarts.
+if grep -qE "^${addr}[[:space:]].*\b${host}\b" /etc/hosts 2> /dev/null; then
+  printf 'ensure-hostname: %s -> %s already correct in /etc/hosts\n' "${host}" "${addr}"
+  exit 0
+fi
+
+# Remove any existing line that mentions the hostname, then append the correct
+# mapping. Writing through a temp file plus mv ensures /etc/hosts is never left
+# in a truncated state if the write is interrupted.
+tmp="$(mktemp /etc/hosts.XXXXXXXX)"
+
+grep -v "\b${host}\b" /etc/hosts > "${tmp}" || true
+printf '%s\t%s\n' "${addr}" "${host}" >> "${tmp}"
+mv "${tmp}" /etc/hosts
+
+printf 'ensure-hostname: set %s -> %s in /etc/hosts\n' "${host}" "${addr}"

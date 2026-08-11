@@ -1,0 +1,85 @@
+#!/bin/sh
+# shellcheck shell=sh
+#
+# Bring up the bridges declared in /etc/network/interfaces, and nothing else.
+#
+# This is what networking.service runs in place of `ifup -a`.  The distinction
+# matters: `ifup -a` brings up every stanza marked auto, which in a container
+# includes nothing useful and may include the uplink the runtime created and
+# owns.  Reconfiguring that from a file the runtime never wrote ranges from a
+# no-op to disconnecting the container.
+#
+# Bridges are different.  A bridge with no member port is entirely internal --
+# it exists only to give guests somewhere to attach -- so bringing one up
+# touches no interface the runtime cares about.  That is the subset of
+# /etc/network/interfaces this image can honour, and honouring it is what makes
+# the file the source of truth for guest networking rather than a decoration.
+#
+# Stanzas are selected by the presence of a bridge-ports line, which is
+# ifupdown2's own marker for a bridge, rather than by name.  Matching on a
+# vmbr* naming convention would silently skip a bridge an operator named
+# something else, and would wrongly match a non-bridge that happened to be
+# called vmbr0.
+set -eu
+
+INTERFACES="${INTERFACES:-/etc/network/interfaces}"
+
+[ -r "${INTERFACES}" ] || exit 0
+
+# Collect interfaces that are both marked auto and configured as bridges.
+#
+# The awk pass walks stanzas: `auto <name>` records a candidate, `iface <name>`
+# opens a stanza, and a bridge-ports line inside that stanza confirms it.  A
+# name is emitted only when both conditions hold, so a bridge that is not auto
+# is left alone (the operator asked for it to be manual) and an auto stanza
+# that is not a bridge is left alone (it is not ours to touch).
+bridges="$(
+  awk '
+    /^[[:space:]]*auto[[:space:]]+/ {
+      for (i = 2; i <= NF; i++) { is_auto[$i] = 1 }
+      next
+    }
+    /^[[:space:]]*iface[[:space:]]+/ { current = $2; next }
+    /^[[:space:]]*bridge[-_]ports[[:space:]]/ {
+      if (current != "" && is_auto[current]) { is_bridge[current] = 1 }
+      next
+    }
+    END { for (name in is_bridge) { print name } }
+  ' "${INTERFACES}" | sort
+)"
+
+[ -n "${bridges}" ] || exit 0
+
+rc=0
+for bridge in ${bridges}; do
+  # Skip bridges that already exist, so restarting networking.service does not
+  # tear down and rebuild a bridge guests are attached to.
+  #
+  # The test is sysfs rather than `ifquery --running`, which was what an earlier
+  # revision used and which is unfit for this: it exits 0 whether or not the
+  # interface exists, distinguishing the two cases only by whether it prints
+  # anything.  Testing its status alone made this helper treat a bridge that had
+  # never been created as already up, skip the ifup, and report success for a
+  # device that did not exist -- which is exactly what happened when PVE's own
+  # apply path staged a second bridge and this reported it up.
+  if [ -d "/sys/class/net/${bridge}" ]; then
+    echo "guest bridge ${bridge} is already up"
+    continue
+  fi
+
+  # Verify the device appeared rather than trusting the exit status.  ifup can
+  # return 0 having done nothing useful, and "brought up" should mean the device
+  # is there.
+  if ifup "${bridge}" && [ -d "/sys/class/net/${bridge}" ]; then
+    echo "guest bridge ${bridge} is up"
+  else
+    # Report and keep going.  One unusable bridge should not prevent the others
+    # from coming up, and the exit status below still marks the unit failed so
+    # the operator is told rather than left to discover it from a guest that
+    # cannot reach anything.
+    echo "error: failed to bring up guest bridge ${bridge}" >&2
+    rc=1
+  fi
+done
+
+exit "${rc}"

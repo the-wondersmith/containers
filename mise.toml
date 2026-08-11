@@ -13,17 +13,22 @@ ci = "{{ env.CI is defined and env.CI == 'true' }}"
 
 [tool_alias]
 rust-nightly = "core:rust"
+skopeo = "go:go.podman.io/skopeo/cmd/skopeo"
 
 [tools]
 act = "latest"
 actionlint = "latest"
+apko = "latest"
 cargo-binstall = "latest"
+crane = "latest"
 editorconfig-checker = "latest"
 go = "latest"
+hadolint = "latest"
 jq = "latest"
 melange = "latest"
 oras = "latest"
 pre-commit = "latest"
+ruff = "latest"
 shellcheck = "latest"
 shfmt = "latest"
 uv = "latest"
@@ -39,6 +44,10 @@ components = "cargo,clippy"
 profile = "minimal"
 version = "nightly"
 components = "cargo,rustfmt"
+
+[tools.skopeo]
+version = "latest"
+install_env = { CGO_ENABLED = "1" }
 
 [settings]
 lockfile = true
@@ -57,8 +66,11 @@ missing_tools = "always"
 description = "Run all lint checks"
 depends = [
     "lint:shell",
+    "lint:python",
+    "lint:containerfile",
     "lint:yaml",
     "lint:actions",
+    "lint:workflow-permissions",
     "lint:editorconfig",
     "lint:melange",
 ]
@@ -90,27 +102,42 @@ prune=(
   -path './.melange-workspace' -o
   # Upstream sources the build actions check out (src/<component>). Ephemeral in
   # CI; persistent locally when act runs with --bind against the real workspace.
-  -path './src'
+  -path './src' -o
+  # Third-party scripts kept for behavioural comparison only. They are gitignored
+  # and never executed or shipped, and they are written to a different house
+  # style, so linting them reports hundreds of findings we will never act on.
+  -path './dockurr'
 )
 
-find . \( "${prune[@]}" \) -prune -o -name '*.sh' -exec shellcheck {} +
-find . \( "${prune[@]}" \) -prune -o -name '*.sh' -exec shfmt -d -i 2 -ci -bn -sr {} +
-
-# Shell under packaging/ carries no .sh suffix: OpenRC init scripts, their
-# conf.d fragments, and helper scripts installed into libexec. Detected by
-# shebang rather than by name, so a new one is never silently skipped.
+# Every repo-authored shell file, from two discovery rules merged into one list.
 #
-# --shell=sh because these are POSIX sh. The exclusions are all OpenRC
-# artefacts: it sources init scripts rather than executing them (SC2148, no
-# shebang needed), consumes their assignments as globals (SC2034, "unused"), and
-# injects settings from the matching /etc/conf.d file (SC2154, "referenced but
-# not assigned").
+# Rule 1: *.sh anywhere outside the prune list above.
+#
+# Rule 2: shell under packaging/, which carries no .sh suffix -- OpenRC init
+# scripts, their conf.d fragments, and helper scripts installed into libexec.
+# Detected by shebang rather than by name, so a new one is never silently
+# skipped. The conf.d fragments have no shebang at all and are matched by suffix.
+#
+# The two rules overlap the moment a packaging/*.sh file exists. Deduping is
+# what keeps that file from being linted twice, and both finds are rooted at ./
+# so their paths compare equal -- `find packaging` would emit `packaging/x.sh`
+# against rule 1's `./packaging/x.sh` and defeat the sort.
+#
+# No --shell override and no blanket --exclude. Each file declares its own
+# dialect with an in-file `# shellcheck shell=` directive, and suppressions are
+# per-file with a comment saying why, so a bash file added under packaging/ is
+# checked as bash rather than silently checked as POSIX. Note that a nested
+# .shellcheckrc is not an option here: shellcheck takes the first config it
+# finds rather than merging, so it would silently drop the root config's
+# enable= lines for exactly the files we care most about.
 #
 # The shebang test uses `if` rather than `cmd && echo`: with `set -o pipefail`
 # the && form leaks grep's non-zero status out of the loop's final iteration
 # whenever the last file examined is not shell, failing the whole task.
-shell_in_packaging() {
-  find packaging -type f | while IFS= read -r f; do
+repo_shell() {
+  find . \( "${prune[@]}" \) -prune -o -name '*.sh' -print
+
+  find ./packaging -type f | while IFS= read -r f; do
     case "${f}" in
       *.initd | *.confd)
         echo "${f}"
@@ -124,8 +151,53 @@ shell_in_packaging() {
   done
 }
 
-shell_in_packaging | xargs -r shellcheck --shell=sh --exclude=SC2034,SC2148,SC2154
-shell_in_packaging | xargs -r shfmt -d -i 2 -ci -bn -sr
+repo_shell | sort -u | xargs -r shellcheck
+repo_shell | sort -u | xargs -r shfmt -d -i 2 -ci -bn -sr
+'''
+
+[tasks."lint:python"]
+hide = true
+description = "Lint and format-check the Python helpers"
+# Ruff honours .gitignore by default, so the prune list lint:shell maintains by
+# hand is unnecessary here -- gitignored build output is skipped automatically.
+# `format --diff` rather than `format`: lint tasks report, they do not rewrite.
+#
+# Both subcommands exit 0 when they match no files, so this is a no-op until the
+# first .py lands rather than a failure.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+ruff check .
+ruff format --check --diff .
+'''
+
+[tasks."lint:containerfile"]
+hide = true
+description = "Lint Containerfiles"
+# Matched by name rather than by a fixed path list so a second image's
+# Containerfile is never silently skipped. Both spellings are accepted because
+# the repo prefers Containerfile but the ecosystem writes Dockerfile.
+#
+# `src` holds upstream checkouts the build actions make; `dockurr` holds
+# third-party artefacts kept only for comparison and never built; `.git`
+# needs no
+# explanation. Neither contains a Containerfile we ship.
+#
+# xargs -r runs hadolint only when a Containerfile is found. The repo ships
+# packaging/proxmox/Containerfile; -r guards the discovery, not its absence.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+find . -path './.git' -prune -o -path './src' -prune -o -path './dockurr' -prune -o \
+  \( -name 'Containerfile' -o -name 'Containerfile.*' \
+  -o -name 'Dockerfile' -o -name 'Dockerfile.*' \) -print |
+  sort -u | xargs -r hadolint
 '''
 
 [tasks."lint:yaml"]
@@ -137,6 +209,25 @@ run = "yamllint -c .yamllint.yaml {{ config_root }}"
 hide = true
 description = "Lint GitHub Actions workflows"
 run = "actionlint"
+
+[tasks."lint:workflow-permissions"]
+hide = true
+description = "Verify reusable-workflow callers grant what their callees request"
+# A reusable workflow cannot hold more permissions than its caller grants, and
+# a caller that grants too little is rejected at workflow validation time -- the
+# run dies before any job starts, and the error names a permission that appears
+# nowhere in the file it points at. `Upstream Watch` broke exactly this way.
+#
+# actionlint does not catch it: the defect lives in the call graph between two
+# files rather than inside either one, and it validated the broken file happily
+# both before and after the fix. Hence a separate check.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cd "{{ config_root }}"
+
+.github/scripts/workflow-permissions.sh
+'''
 
 [tasks."lint:editorconfig"]
 hide = true
@@ -182,7 +273,7 @@ set -euo pipefail
 
 cd "{{ config_root }}"
 
-rm -rf packages melange-cache .melange-src .melange-logs dist
+rm -rf packages melange-cache .melange-src .melange-logs dist .pve-matrix
 
 echo "cleaned"
 '''
@@ -195,6 +286,10 @@ description = "Build every component and assemble the Alpine bundle locally"
 #
 # The glibc podman component is NOT built here: it needs a Debian environment
 # and only feeds the .deb. Use `mise run build:deb` for that half.
+#
+# This task builds the podman package only. The Proxmox VE image is built by
+# `docker build` against packaging/proxmox/Containerfile (see docs/pve-image.md)
+# and in CI by build-proxmox-image.yaml; it has no mise build task.
 depends = [
     "build:components",
 ]
@@ -710,6 +805,54 @@ act release \
   -e .act/events/release-published.json
 '''
 
+[tasks."test:kvm-probe"]
+description = "Verify the kvm-probe constant encoding and output contract"
+hide = true
+# kvm-probe --self-test validates the ioctl constant encoding and JSON output
+# contract without requiring /dev/kvm to exist.  A linter cannot detect a
+# wrong _IO encoding; this is the only thing standing between a typo'd
+# constant and a probe that silently always reports absent.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cd "{{ config_root }}"
+
+packaging/pve-container-shim/libexec/kvm-probe --self-test
+'''
+
+[tasks."test:version-skew"]
+description = "Detect unexpected cross-architecture version divergence"
+hide = true
+# Version parity between architectures is a release property, not a build
+# property: a divergence installs cleanly and only surfaces at runtime, on one
+# architecture, in a component nobody changed.  The detector reads the package
+# matrix rather than the network so it runs offline and deterministically, and
+# it fails on any divergence that is not named individually in its allowlist.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cd "{{ config_root }}"
+
+.github/scripts/pve-version-skew.sh
+'''
+
+[tasks."test:release-identity"]
+description = "Verify release product classification and previous-release selection"
+hide = true
+# Release identity decides pkgrel and the tag for every release. Getting it
+# wrong resets pkgrel to 1, and softprops then updates an existing release in
+# place rather than creating a new one, which loses a build silently. The suite
+# is pure shell over synthetic fixtures plus one read-only live assertion, so it
+# costs nothing to run on every pull request and is the only thing standing
+# between a second product's tags and podman's release history.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cd "{{ config_root }}"
+
+.github/scripts/release-identity-test.sh
+'''
+
 [tasks.tests]
 description = "Run all tests"
 # The acceptance suite needs a built package and privileged container access;
@@ -717,6 +860,9 @@ description = "Run all tests"
 # runnable without a build is definition validation, which lint already covers.
 depends = [
     "lint:melange",
+    "test:release-identity",
+    "test:kvm-probe",
+    "test:version-skew",
 ]
 run = '''
 #!/usr/bin/env bash
@@ -734,4 +880,8 @@ echo "    -v \"\$PWD/dist/\$(uname -m):/pkg:ro\" \\"
 echo "    -v \"\$PWD/.github/scripts:/scripts:ro\" \\"
 echo "    -e DISTRO=alpine -e COMPONENTS=\"\$(cat manifest.json)\" \\"
 echo "    alpine:3.23 /bin/sh /scripts/acceptance.sh"
+echo
+echo "The Proxmox image has its own suite (.github/scripts/pve-acceptance.sh),"
+echo "which drives containers from the host and needs a built image plus a"
+echo "KVM_AVAILABLE signal; it runs in CI via test-proxmox-image.yaml."
 '''

@@ -1,0 +1,11 @@
+systemd/lxcfs.service.d/10-container.conf usr/lib/systemd/system/lxcfs.service.d/
+systemd/networking.service.d/10-container.conf usr/lib/systemd/system/networking.service.d/
+systemd/ifupdown2-pre.service.d/10-container.conf usr/lib/systemd/system/ifupdown2-pre.service.d/
+systemd/pve-container-hosts.service usr/lib/systemd/system/
+systemd/pve-guest-dnsmasq.service usr/lib/systemd/system/
+tmpfiles/pve-container-shim.conf usr/lib/tmpfiles.d/
+libexec/ensure-hostname usr/libexec/pve-container-shim/
+libexec/ifup-guest-bridges usr/libexec/pve-container-shim/
+libexec/kvm-probe usr/libexec/pve-container-shim/
+sbin/ifreload usr/sbin/
+sbin/update-initramfs usr/sbin/

@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+#
+# Probe whether this container can run PVE's own LXC guests.
+#
+# There is no single device or file that answers this.  Running a container
+# inside a container needs two things from the host, and they fail differently:
+#
+#   cgroup v2 delegation -- without it `pct start` cannot create the guest's
+#     cgroup, and the failure surfaces as a guest that will not start rather
+#     than as a missing capability.  This is a hard prerequisite.
+#
+#   AppArmor -- lxc applies a confinement profile to each guest.  Without it
+#     guests still run, unconfined.  That is a security degradation, not a
+#     functional one, so it must not be reported as absent: doing so would
+#     disable LXC support entirely over a policy concern the operator may have
+#     already accepted.
+#
+# So this probe delegates to the two probes that can answer definitively and
+# combines their verdicts asymmetrically.  It deliberately does not duplicate
+# their logic; a second implementation of the same check is a second thing to
+# keep correct.
+#
+# What this probe does NOT establish, and must not be read as establishing:
+# that `pct start` will succeed.  It checks prerequisites, and prerequisites
+# are necessary rather than sufficient.  The acceptance suite's own evidence is
+# that starting a guest additionally requires privileges beyond the documented
+# reduced tier -- item 7 runs its LXC lifecycle under --privileged for exactly
+# that reason.  Probing the real thing would mean creating and starting a
+# container, which is far too heavy for a start-up probe, so the honest course
+# is to report what was measured and name what was not.  The reason token says
+# prerequisites_met rather than functional so that the summary line does not
+# claim more than the check performed.
+set -euo pipefail
+
+# shellcheck source=packaging/proxmox/image/lib/probe-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/probe-common.sh"
+
+readonly CAPABILITY="nested_lxc"
+PROBE_DIR="$(dirname "${BASH_SOURCE[0]}")"
+readonly PROBE_DIR
+
+main() {
+  local cgroup_json cgroup_outcome
+  local apparmor_json apparmor_outcome
+
+  cgroup_json="$("${PROBE_DIR}/cgroup-delegation")" || true
+  cgroup_outcome="$(probe_field "${cgroup_json}" outcome)"
+
+  # cgroup delegation is the hard prerequisite.  Its own remedy text already
+  # names the exact runtime flag, so it is passed through rather than
+  # paraphrased -- a paraphrase would drift from the probe that owns the check.
+  if [[ "${cgroup_outcome}" == "absent" ]]; then
+    emit_json "${CAPABILITY}" absent cgroup_delegation_absent \
+      "Nested LXC needs cgroup v2 delegation, which the cgroup-delegation probe reports absent." \
+      "$(probe_field "${cgroup_json}" remedy)"
+    return "${PROBE_ABSENT}"
+  fi
+
+  if [[ "${cgroup_outcome}" == "indeterminate" ]]; then
+    emit_json "${CAPABILITY}" indeterminate cgroup_delegation_indeterminate \
+      "Nested LXC needs cgroup v2 delegation, which could not be determined from inside the container." \
+      "$(probe_field "${cgroup_json}" remedy)"
+    return "${PROBE_INDETERMINATE}"
+  fi
+
+  apparmor_json="$("${PROBE_DIR}/apparmor")" || true
+  apparmor_outcome="$(probe_field "${apparmor_json}" outcome)"
+
+  # AppArmor missing is reported as present-but-degraded, with the consequence
+  # spelled out in the detail.  The operator sees it in the startup summary and
+  # can decide; the alternative -- reporting absent -- would silently turn off
+  # a working feature.
+  if [[ "${apparmor_outcome}" != "present" ]]; then
+    emit_json "${CAPABILITY}" present unconfined \
+      "cgroup delegation is available; AppArmor is not, so PVE's LXC guests will run unconfined. Starting a guest also requires privileges this probe does not test." \
+      ""
+    return "${PROBE_PRESENT}"
+  fi
+
+  emit_json "${CAPABILITY}" present prerequisites_met \
+    "cgroup v2 delegation and AppArmor are both available. Starting a guest also requires privileges this probe does not test." \
+    ""
+  return "${PROBE_PRESENT}"
+}
+
+main "$@"

@@ -1,0 +1,281 @@
+---
+name: Release Proxmox image
+
+# The proxmox release orchestrator. Authorises the actor, builds and pushes the
+# multi-arch OCI image (delegating package builds to build-proxmox-packages.yaml
+# via build-proxmox-image.yaml), then publishes a GitHub release with the two
+# .deb assets, a per-product manifest, and signed build-provenance attestations.
+#
+# There is no `push: tags` trigger. Tags are an *output* of this workflow, not
+# an input to it -- the release records which versions were built, and the
+# upstream watcher reads that record back on its next run.
+#
+# Default prerelease: true. An unreviewed manual dispatch must not land directly
+# in the APT repository; promote-prerelease.yaml handles the soak window and
+# dispatches to the APT control plane after it passes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image-version:
+        required: true
+        type: string
+        description: >-
+          Proxmox VE version to release, e.g. 9.2.9. Used as the base for the
+          image tag set and the GitHub release tag.
+      pkgrel:
+        required: false
+        type: string
+        default: "1"
+        description: >-
+          Rebuild counter. Resets to 1 when image-version advances and
+          increments otherwise, so a packaging-only change yields a distinct,
+          addressable release without altering the upstream version component.
+      shim-version:
+        required: true
+        type: string
+        description: Debian version string for pve-container-shim, e.g. 1.0.0-1.
+      ifupdown2-ref:
+        required: true
+        type: string
+        description: Git ref to build ifupdown2 from, e.g. debian/3.3.0-1+pmx12.
+      ifupdown2-version:
+        required: true
+        type: string
+        description: Expected Debian version string for ifupdown2, e.g. 3.3.0-1+pmx12.
+      prerelease:
+        required: false
+        type: boolean
+        default: true
+        description: >-
+          Publish as a prerelease and skip the APT dispatch. Defaults to true so
+          an unreviewed manual dispatch does not land in the APT repository.
+
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Guard the entire release pipeline. Nothing downstream runs until the
+  # triggering actor passes the trust check. This IS a publishing entrypoint,
+  # so Dependabot must not reach it.
+  # ─────────────────────────────────────────────────────────────────────────────
+  authorize:
+    name: Authorize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git; do not leave the token on disk.
+          persist-credentials: false
+
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+        with:
+          # Publishing is a human-supervised action; Dependabot must not
+          # reach it.
+          allow-dependabot: "false"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Build and push the multi-arch OCI image. The packages job nested inside
+  # build-proxmox-image.yaml builds both .deb files and uploads them as
+  # workflow artifacts (`pve-container-shim-deb` and `ifupdown2-deb`); the
+  # publish job below downloads and reuses them -- they are not rebuilt.
+  # ─────────────────────────────────────────────────────────────────────────────
+  image:
+    name: Build & push image
+    needs: authorize
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-proxmox-image.yaml
+    with:
+      push: true
+      image-version: ${{ inputs.image-version }}
+      pkgrel: ${{ inputs.pkgrel }}
+      shim-version: ${{ inputs.shim-version }}
+      ifupdown2-ref: ${{ inputs.ifupdown2-ref }}
+      ifupdown2-version: ${{ inputs.ifupdown2-version }}
+    # No `secrets:` block. build-proxmox-image.yaml authenticates to GHCR with
+    # the automatic GITHUB_TOKEN, which every workflow_call receives without
+    # being passed anything. `secrets: inherit` would hand it every repository
+    # secret for no benefit -- see ci-security.md, "Secrets are named".
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Create the GitHub release. Reuses the .deb artifacts uploaded by the nested
+  # packages job rather than rebuilding them. Attests both packages, writes a
+  # per-product manifest.json, and optionally notifies the APT control plane.
+  # ─────────────────────────────────────────────────────────────────────────────
+  publish:
+    name: Publish proxmox/v${{ inputs.image-version }}-${{ inputs.pkgrel }}
+    runs-on: ubuntu-latest
+    needs: image
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      # Required to authenticate to GHCR and resolve the image index digest
+      # for inclusion in the release manifest.
+      packages: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git; do not leave the token on disk.
+          persist-credentials: false
+
+      - name: Download .deb artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          # Both artifacts were uploaded by the packages job nested inside
+          # build-proxmox-image.yaml. The `*-deb` pattern matches both
+          # `pve-container-shim-deb` and `ifupdown2-deb`. Each artifact is
+          # placed in a sub-directory of dist/ named after the artifact, so
+          # dist/pve-container-shim-deb/<file>.deb and
+          # dist/ifupdown2-deb/<file>.deb are unambiguous.
+          pattern: "*-deb"
+          path: dist
+
+      - name: Assert the package set is complete
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Proxmox releases exactly two Architecture: all packages. Assert
+          # both are present before writing the manifest or attesting, so a
+          # missing or misnamed artifact fails here with a clear message rather
+          # than fail_on_unmatched_files triggering late in the release step.
+          # This check is per-product: it is NOT the four-artifact assertion
+          # from release.yaml, which is hardcoded to podman's .deb and .apk set.
+          declare -i missing=0
+          for expected in \
+            'dist/pve-container-shim-deb/*_all.deb' \
+            'dist/ifupdown2-deb/*_all.deb'; do
+            # shellcheck disable=SC2086
+            if ! compgen -G ${expected} > /dev/null; then
+              echo "::error::no package matching ${expected}"
+              missing=1
+            else
+              echo "OK: ${expected}"
+            fi
+          done
+
+          [[ "${missing}" -eq 0 ]]
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image index digest
+        id: index-digest
+        shell: bash
+        env:
+          PRIMARY_TAG: >-
+            ghcr.io/${{ github.repository }}/proxmox:${{ inputs.image-version }}-${{ inputs.pkgrel }}
+        run: |
+          set -euo pipefail
+          # Derive the digest from the raw index bytes rather than asking
+          # buildx for it.  There is no top-level .Digest field -- the field is
+          # .Manifest.Digest -- and docker/buildx#1175 means a --format template
+          # naming it is ignored entirely, printing the pretty-print output
+          # instead.  That failure is silent: the attestation subject would be a
+          # human-readable blob rather than a digest, and nothing downstream
+          # would notice.  A digest is by definition the sha256 of the bytes it
+          # names, so hashing --raw output cannot drift with a field rename.
+          digest="sha256:$(docker buildx imagetools inspect --raw "${PRIMARY_TAG}" | sha256sum | cut -d' ' -f1)"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Write the release manifest
+        shell: bash
+        env:
+          TAG: proxmox/v${{ inputs.image-version }}-${{ inputs.pkgrel }}
+          PKGREL: ${{ inputs.pkgrel }}
+          IMAGE_VERSION: ${{ inputs.image-version }}
+          SHIM_VERSION: ${{ inputs.shim-version }}
+          IFUPDOWN2_VERSION: ${{ inputs.ifupdown2-version }}
+          IMAGE_DIGEST: ${{ steps.index-digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          # Per-product manifest for the proxmox release. The schema differs
+          # intentionally from the podman manifest (which records `components`).
+          # release-identity.sh's consumers only require it to exist and parse
+          # as valid JSON; the specific keys are this product's own contract and
+          # are not read by any cross-product tooling today.
+          jq -n \
+            --arg tag "${TAG}" \
+            --argjson pkgrel "${PKGREL}" \
+            --arg image_version "${IMAGE_VERSION}" \
+            --arg shim_version "${SHIM_VERSION}" \
+            --arg ifupdown2_version "${IFUPDOWN2_VERSION}" \
+            --arg image_digest "${IMAGE_DIGEST}" \
+            --arg build_run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{
+              tag: $tag,
+              pkgrel: $pkgrel,
+              image_version: $image_version,
+              shim_version: $shim_version,
+              ifupdown2_version: $ifupdown2_version,
+              image_digest: $image_digest,
+              build_run: $build_run
+            }' > dist/manifest.json
+
+          cat dist/manifest.json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+        with:
+          # Attest both .deb packages. The OCI image (per-arch manifests and
+          # the merged index) was already attested by build-proxmox-image.yaml;
+          # do not re-attest it here.
+          subject-path: |
+            dist/pve-container-shim-deb/*_all.deb
+            dist/ifupdown2-deb/*_all.deb
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228  # v3
+        with:
+          # TAG FORMAT: `proxmox/v${image-version}-${pkgrel}`. The `proxmox/`
+          # prefix is load-bearing: release-identity.sh classify() splits on
+          # the first `/` to determine the product. A bare `vX.Y.Z-N` tag
+          # would be classified as podman and poison podman's release history,
+          # making every subsequent podman pkgrel derivation read from a
+          # manifest that carries no podman component versions.
+          tag_name: proxmox/v${{ inputs.image-version }}-${{ inputs.pkgrel }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          # make_latest: false is MANDATORY. If the first stable proxmox release
+          # becomes GitHub's "latest", upstream-watch.yaml resolves it instead of
+          # the latest podman release, reads every podman component version as
+          # empty, and triggers a full podman rebuild-and-release every Monday.
+          make_latest: false
+          files: |
+            dist/manifest.json
+            dist/pve-container-shim-deb/*_all.deb
+            dist/ifupdown2-deb/*_all.deb
+
+      # A release created with the default GITHUB_TOKEN does not fire the
+      # `release: published` event (GitHub's anti-recursion rule), so
+      # publish-apt-packages.yaml will not run for this path. Dispatch directly.
+      # Skipped for prereleases: a proxmox release reaches the APT repository
+      # only after it has survived the soak window.
+      - name: Notify the APT control plane
+        if: ${{ !inputs.prerelease }}
+        uses: ./.github/actions/apt-dispatch
+        with:
+          tag: proxmox/v${{ inputs.image-version }}-${{ inputs.pkgrel }}
+          token: ${{ secrets.APT_DISPATCH_TOKEN }}

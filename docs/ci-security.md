@@ -1,6 +1,7 @@
 # CI security posture
 
-This repository builds untrusted upstream source as root, on runners that hold `contents: write` and `id-token: write` in the release lane.
+This repository builds untrusted upstream source as root, on runners that hold `contents: write` and `id-token: write` in the release
+lanes — `release.yaml` for the podman packages and `release-proxmox.yaml` for the Proxmox VE image and its two `Architecture: all` `.deb`s.
 The controls below exist because of that, not as boilerplate.
 
 ## The trust list
@@ -41,6 +42,13 @@ gated and the actor is the same identity.
 
 `test-podman-packages.yaml` gates in its matrix job directly, since it has only one.
 
+`release-proxmox.yaml` gates through a dedicated `authorize` job that its privileged `image` and `publish` jobs depend on — the same shape as
+`build-podman-packages.yaml`, and for the same reason: it is the lane that builds untrusted upstream source as root and then publishes. The
+other three Proxmox workflows carry no `authorize-actor`. `build-proxmox-packages.yaml`, `build-proxmox-image.yaml`, and
+`test-proxmox-image.yaml` all hold `contents: read` only, reference no repository secret, and publish nothing; each is `workflow_dispatch`-able
+in its own right, and GitHub already requires write access to dispatch a workflow, so an unauthorized actor cannot start them. The asymmetry is
+deliberate — the gate sits on the lane that can publish, not on the lanes that only build and discard.
+
 ## Tokens stay off disk
 
 Every `actions/checkout` in this repository passes `persist-credentials: false`. No step pushes with git, and several go on to build
@@ -53,9 +61,14 @@ untrusted upstream source as root; leaving the token in `.git/config` would give
 blast radius to the credential actually in use and makes the dependency visible in the workflow's own interface. It is declared
 `required: false`, because a prerelease run never dispatches and has no need of the token at all.
 
-`APT_DISPATCH_TOKEN` is the only secret any workflow here references — verifiable with
-`grep -ro 'secrets\.[A-Z_]*' .github/`. Others are configured on the repository for unrelated tooling and are never passed
-to a workflow. See [package signing](signing.md) for why there is no key material here.
+`release-proxmox.yaml` references `APT_DISPATCH_TOKEN` the same way, and gates it `if: ${{ !inputs.prerelease }}` so a prerelease dispatch
+never touches it. It passes **no** `secrets:` block to the nested `build-proxmox-image.yaml` it calls: that build authenticates to GHCR with
+the automatic `GITHUB_TOKEN`, which every `workflow_call` receives without being handed anything, so `secrets: inherit` there would grant
+every repository secret for no benefit.
+
+`APT_DISPATCH_TOKEN` is the only *repository-configured* secret any workflow here references — verifiable with
+`grep -ro 'secrets\.[A-Z_]*' .github/`, whose only other hit is the automatic per-run `GITHUB_TOKEN`. Everything else configured on the
+repository is for unrelated tooling and is never passed to a workflow. See [package signing](signing.md) for why there is no key material here.
 
 ## Auto-merge is gated four ways
 

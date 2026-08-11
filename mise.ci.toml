@@ -10,12 +10,16 @@ enable_tools = [
     "editorconfig-checker",
     # Provides the podman glibc build's toolchain, replacing a go.dev download.
     "go",
+    # Lints the Proxmox image Containerfile.
+    "hadolint",
     # Read the components JSON and the release manifest.
     "jq",
     # `melange compile` on every PR; `melange build` in the component jobs.
     "melange",
     # Pushes and pulls the GHCR component cache.
     "oras",
+    # Lints the Python capability probes.
+    "ruff",
     "shellcheck",
     "shfmt",
     # Required for yamllint, which has no binary release and resolves to
