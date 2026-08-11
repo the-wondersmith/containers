@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+#
+# Probe whether mount(2) is actually usable, and name the reason when it is not.
+#
+# This exists because "the capability is held" and "the syscall is permitted"
+# are two different facts, and for months this repository only ever measured
+# the first.  A capability decides whether the kernel would allow the call; a
+# Linux Security Module decides whether the call is ever made.  Docker's default
+# AppArmor profile denies mount(2) outright to a container holding
+# CAP_SYS_ADMIN, and SELinux refuses it for an unlabelled container_t.  Neither
+# shows up in CapEff, and neither is visible to the apparmor probe next to this
+# one: a host-side confining profile is indistinguishable from no LSM at all
+# when observed from inside the thing being confined.
+#
+# The consequence, when this went unnamed, was that the image was declared
+# working on two runtimes that both happened to permit mount(2) for unrelated
+# reasons -- Docker Desktop loads no AppArmor inside its LinuxKit VM, and
+# rootful podman does not apply Docker's profile -- and failed on mainstream
+# Docker-on-Linux, where systemd exits 255 during early boot with no log line of
+# its own because it cannot mount anything.  The FUSE probe did detect that, as
+# "mount_failed" rather than "device_absent", but nothing treated the
+# distinction as a class worth reporting on its own.  This probe does.
+#
+# It deliberately mounts a tmpfs rather than reusing the FUSE probe's real FUSE
+# mount.  tmpfs needs no device, so a refusal here cannot be confused with a
+# missing or unreadable /dev/fuse, which isolates the one variable this probe
+# exists to measure.
+set -euo pipefail
+
+# shellcheck source=packaging/proxmox/image/lib/probe-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/probe-common.sh"
+
+readonly CAPABILITY="mount_syscall"
+
+# CAP_SYS_ADMIN is capability 21.  CapEff is the effective set, which is what
+# the kernel consults -- CapBnd only bounds what may ever be acquired, so a
+# process can sit inside a permissive bounding set holding nothing at all.
+readonly CAP_SYS_ADMIN_BIT=21
+
+# has_sys_admin -- true when CAP_SYS_ADMIN is in the effective set.
+has_sys_admin() {
+  local capeff
+
+  capeff="$(awk '/^CapEff:/ { print $2 }' /proc/self/status 2> /dev/null || true)"
+  [[ -n "${capeff}" ]] || return 1
+
+  (((0x${capeff} >> CAP_SYS_ADMIN_BIT) & 1))
+}
+
+# confining_lsm -- name the module most likely to have refused, for the detail.
+#
+# This is a hint, not a verdict.  Neither module reports "I denied that call"
+# through any interface reachable from inside the container, so the honest thing
+# is to say which one is loaded and let the operator check the host's audit log.
+confining_lsm() {
+  local names=""
+
+  if [[ -r /sys/module/apparmor/parameters/enabled ]] \
+    && [[ "$(cat /sys/module/apparmor/parameters/enabled 2> /dev/null || true)" == "Y" ]]; then
+    names="AppArmor"
+  fi
+
+  if [[ -d /sys/fs/selinux ]]; then
+    names="${names:+${names} and }SELinux"
+  fi
+
+  printf '%s' "${names}"
+}
+
+main() {
+  local probedir lsm
+
+  if ! has_sys_admin; then
+    emit_json "${CAPABILITY}" "absent" "capability_absent" \
+      "CAP_SYS_ADMIN is not in this process's effective set, so mount(2) cannot succeed regardless of any security module." \
+      "--cap-add SYS_ADMIN (or --privileged)"
+    return "${PROBE_ABSENT}"
+  fi
+
+  probedir="$(mktemp -d)"
+
+  if mount -t tmpfs -o size=1m pveprobe "${probedir}" 2> /dev/null; then
+    umount "${probedir}" 2> /dev/null || true
+    rm -rf "${probedir}"
+    emit_json "${CAPABILITY}" "present" "permitted" \
+      "CAP_SYS_ADMIN is held and a tmpfs mount succeeded, so mount(2) is usable." \
+      ""
+    return "${PROBE_PRESENT}"
+  fi
+
+  rm -rf "${probedir}"
+
+  # This is the case the whole probe exists for.  The capability is held and the
+  # call was still refused, which can only be a security module, a seccomp
+  # filter, or a read-only namespace -- none of which any capability check would
+  # have shown.
+  lsm="$(confining_lsm)"
+  emit_json "${CAPABILITY}" "absent" "refused_despite_capability" \
+    "CAP_SYS_ADMIN is held but a tmpfs mount was refused${lsm:+, and ${lsm} is loaded on this host}. pmxcfs, lxcfs and systemd's own early boot all mount filesystems, so none of them will start." \
+    "--security-opt apparmor=unconfined (or the SELinux equivalent for this host)"
+  return "${PROBE_ABSENT}"
+}
+
+main "$@"

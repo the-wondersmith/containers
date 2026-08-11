@@ -253,6 +253,91 @@ failed_units_are_declared() {
   return 0
 }
 
+# ── Environment: what this run was green on ─────────────────────────────────
+#
+# A pass means nothing until it says what it passed on.  Every earlier revision
+# of this suite reported an identical green run against Docker Desktop and
+# against rootful podman on Linux, and the two are not equivalent: the first
+# runs inside a LinuxKit VM that loads no AppArmor at all, the second does not
+# apply Docker's default profile.  Both permit mount(2); neither said so.  The
+# consequence was that mainstream Docker-on-Linux -- where the profile denies
+# mount(2) even to a container holding CAP_SYS_ADMIN -- was never exercised,
+# and the gap surfaced only when CI ran on a host that enforces.
+#
+# So the environment is recorded, not assumed.  Nothing here asserts: a host
+# with SELinux enforcing is not a failure, and a suite that treated it as one
+# would be making a claim about the world rather than about the image.  What it
+# does is put the discriminating facts in the output, so that a green run and
+# the host it was green on travel together.
+report_environment() {
+  group "environment"
+
+  local engine="unknown"
+  engine="$(docker info --format \
+    '{{.Name}} / {{.ServerVersion}} / {{.OperatingSystem}} / {{.Architecture}}' \
+    2> /dev/null || echo "unreadable")"
+  echo "  engine:    ${engine}"
+
+  # SecurityOptions is the engine's own statement of what it applies to every
+  # container it starts.  It is the field that would have named the AppArmor
+  # profile years before anyone went looking for it.
+  local security
+  security="$(docker info --format '{{.SecurityOptions}}' 2> /dev/null || echo "unreadable")"
+  echo "  security:  ${security}"
+
+  local cgroups
+  cgroups="$(docker info --format 'v{{.CgroupVersion}} driver={{.CgroupDriver}}' 2> /dev/null \
+    || echo "unreadable")"
+  echo "  cgroups:   ${cgroups}"
+
+  # Read from inside a container because the kernel is shared: this is the host
+  # kernel's view whether or not this script runs on the same machine as the
+  # daemon, which it often does not.
+  local apparmor selinux
+  apparmor="$(docker run --rm --entrypoint /bin/sh "${IMAGE}" -c \
+    'cat /sys/module/apparmor/parameters/enabled 2> /dev/null || echo "not-loaded"' 2> /dev/null \
+    || echo "unreadable")"
+  selinux="$(docker run --rm --entrypoint /bin/sh "${IMAGE}" -c \
+    '[ -d /sys/fs/selinux ] && echo present || echo absent' 2> /dev/null || echo "unreadable")"
+  echo "  apparmor:  ${apparmor}"
+  echo "  selinux:   ${selinux}"
+
+  # The single most useful line, because it measures the thing rather than
+  # inferring it from the three lines above.  A capability decides whether the
+  # kernel would permit mount(2); a security module decides whether the call is
+  # ever made, and only attempting it distinguishes the two.
+  local mount_probe
+  mount_probe="$(docker run --rm "${REDUCED_FLAGS[@]}" \
+    --entrypoint /usr/local/lib/pve/probe/mount-syscall "${IMAGE}" 2>&1 || true)"
+  echo "  mount(2):  ${mount_probe}"
+
+  # And again with the confinement flag removed, which is the measurement that
+  # says what this host would have done on its own.  The line above uses the
+  # documented invocation, and the documented invocation carries
+  # --security-opt apparmor=unconfined precisely because a host that enforces
+  # would otherwise refuse -- so on its own it can only ever report success and
+  # says nothing about the host.  Running it both ways turns a confirmation into
+  # a diagnosis: "permitted" here means the flag is redundant on this host,
+  # "refused_despite_capability" means it is load-bearing.  Neither is a
+  # failure; both are facts worth having in the output rather than in someone's
+  # memory of which runtime this was.
+  local bare=() flag
+  for flag in "${REDUCED_FLAGS[@]}"; do
+    [[ "${flag}" == "apparmor=unconfined" ]] && continue
+    [[ "${flag}" == "--security-opt" ]] && continue
+    bare+=("${flag}")
+  done
+
+  local unconfined_probe
+  unconfined_probe="$(docker run --rm "${bare[@]}" \
+    --entrypoint /usr/local/lib/pve/probe/mount-syscall "${IMAGE}" 2>&1 || true)"
+  echo "  unflagged: ${unconfined_probe}"
+
+  endgroup
+}
+
+report_environment
+
 # ── Item 1: the container starts and systemd reaches a stable target ─────────
 group "item 1: systemd reaches a stable target"
 if start_container "${CONTAINER}" "${REDUCED_FLAGS[@]}"; then

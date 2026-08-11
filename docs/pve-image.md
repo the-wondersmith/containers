@@ -16,7 +16,7 @@ container has no stable node identity to cluster with in any case.
 
 ## Environment variable contract
 
-Five capability variables, each accepting exactly `auto`, `require`, or `disable`. The default is `auto`.
+Six capability variables, each accepting exactly `auto`, `require`, or `disable`. The default is `auto`.
 
 | variable | governs |
 |----------|---------|
@@ -25,6 +25,7 @@ Five capability variables, each accepting exactly `auto`, `require`, or `disable
 | `PVE_CGROUP_DELEGATION` | cgroup v2 delegation, which `pct start` requires |
 | `PVE_NESTED_LXC` | the composite of cgroup delegation and AppArmor that LXC guests need |
 | `PVE_GUEST_NETWORK` | the bridge and NAT that give guests a network |
+| `PVE_MOUNT_SYSCALL` | whether `mount(2)` is permitted at all, which a held `CAP_SYS_ADMIN` does not guarantee |
 
 ### Semantics
 
@@ -139,6 +140,13 @@ Each probe is independently invocable at `/usr/local/lib/pve/probe/<name>` and e
   `CapBnd`: the bounding set says what the kernel believes is held, not what a seccomp profile will
   actually permit. See [Guest networking](#guest-networking) for what the entrypoint does when it resolves
   `enabled`.
+- **`mount-syscall`** mounts a tmpfs and unmounts it. It reports first, because everything else that
+  mounts anything fails downstream of it. Its value is the distinction it draws: `capability_absent`
+  means `CAP_SYS_ADMIN` is not held, while `refused_despite_capability` means it is held and the call was
+  refused anyway — which only a security module, a seccomp filter, or a read-only namespace can do, and
+  which no capability check would ever show. A tmpfs is used rather than a FUSE mount because it needs no
+  device, so a refusal here cannot be confused with a missing `/dev/fuse`. See
+  [Deviations §23](../DEVIATIONS.md) for the AppArmor case that made this worth measuring separately.
 
 ## Runtime requirements
 

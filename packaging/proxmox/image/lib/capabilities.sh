@@ -10,7 +10,7 @@
 # The contract
 # ---------------------------------------------------------------------------
 #
-# Five environment variables, each taking auto | require | disable, each
+# Six environment variables, each taking auto | require | disable, each
 # defaulting to auto:
 #
 #   PVE_KVM               hardware-assisted virtualisation via /dev/kvm
@@ -18,6 +18,8 @@
 #   PVE_NESTED_LXC        running PVE's own LXC guests inside this container
 #   PVE_CGROUP_DELEGATION cgroup v2 delegation for guest resource limits
 #   PVE_GUEST_NETWORK     the guest bridge and its NAT, which need CAP_NET_ADMIN
+#   PVE_MOUNT_SYSCALL     whether mount(2) is permitted at all, which a held
+#                         CAP_SYS_ADMIN does not by itself guarantee
 #
 #   policy   | present | absent                  | indeterminate
 #   ---------+---------+-------------------------+---------------------------
@@ -80,6 +82,7 @@ declare -rA CAPABILITY_PROBES=(
   [nested_lxc]="nested-lxc"
   [cgroup_delegation]="cgroup-delegation"
   [guest_network]="guest-network"
+  [mount_syscall]="mount-syscall"
 )
 
 # Capability name -> environment variable holding its policy.
@@ -89,6 +92,7 @@ declare -rA CAPABILITY_VARS=(
   [nested_lxc]="PVE_NESTED_LXC"
   [cgroup_delegation]="PVE_CGROUP_DELEGATION"
   [guest_network]="PVE_GUEST_NETWORK"
+  [mount_syscall]="PVE_MOUNT_SYSCALL"
 )
 
 # Remedy text used when no probe ran, i.e. policy=disable.  Without this the
@@ -101,6 +105,7 @@ declare -rA CAPABILITY_DISABLED_REMEDY=(
   [nested_lxc]="set PVE_NESTED_LXC=auto to enable"
   [cgroup_delegation]="set PVE_CGROUP_DELEGATION=auto to enable"
   [guest_network]="set PVE_GUEST_NETWORK=auto and pass --cap-add NET_ADMIN to enable"
+  [mount_syscall]="set PVE_MOUNT_SYSCALL=auto to report whether mount(2) is usable"
 )
 
 # Resolution results, filled by resolve_capabilities.
@@ -114,7 +119,10 @@ declare -gA CAPABILITY_PROBE_RAN=()
 # The order matters only for reproducible output; bash associative arrays have
 # no stable iteration order and a summary whose lines shuffle between runs is
 # harder to diff than one that does not.
-readonly CAPABILITY_ORDER=(fuse kvm cgroup_delegation nested_lxc guest_network)
+# mount_syscall is resolved first: everything else that mounts anything --
+# pmxcfs, lxcfs, systemd's own early boot -- fails downstream of it, and its
+# absence explains those failures rather than repeating them.
+readonly CAPABILITY_ORDER=(mount_syscall fuse kvm cgroup_delegation nested_lxc guest_network)
 
 # ---------------------------------------------------------------------------
 
@@ -277,9 +285,9 @@ resolve_one() {
 
 # resolve_capabilities
 #
-# Resolve all five, then write the state file.  fuse is resolved first because
-# it is the one the management plane cannot do without -- an operator watching
-# the log sees the answer that matters most before anything else scrolls past.
+# Resolve all six, then write the state file, in CAPABILITY_ORDER: the answers
+# that explain other answers come first, so an operator watching the log reads a
+# cause before its consequences scroll past.
 resolve_capabilities() {
   local capability
 
