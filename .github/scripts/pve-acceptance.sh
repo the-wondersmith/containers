@@ -202,7 +202,17 @@ start_container() {
     sleep 3
   done
 
+  # A start-up failure that reports only "<unreachable>" says nothing about
+  # whether the container exited, is still running with systemd wedged, or
+  # never got past the entrypoint.  Those have entirely different causes, and
+  # the difference is one docker inspect away.  An earlier revision printed
+  # the bare state and every CI failure had to be reproduced by hand before it
+  # could be read at all.
   echo "  last observed system state: ${state:-<unreachable>}" >&2
+  echo "  container: $(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} err={{.State.Error}}' "${name}" 2> /dev/null || echo '<no such container>')" >&2
+  echo "  --- last 40 lines of container output ---" >&2
+  docker logs --tail 40 "${name}" 2>&1 | sed 's/^/  /' >&2 || true
+  echo "  --- end container output ---" >&2
   return 1
 }
 
