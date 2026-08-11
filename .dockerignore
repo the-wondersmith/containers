@@ -30,10 +30,21 @@ packages/
 .devcontainer/
 *.md
 
-# Built artefacts, except the shim package the image installs.
+# Built artefacts, except the two packages the image installs.
+#
+# Both are passed to the Containerfile as context-relative paths (SHIM_DEB and
+# IFUPDOWN2_DEB), so excluding dist/ wholesale would exclude them too.  The
+# re-inclusions carry both a flat and a nested form on purpose: a local build
+# passes dist/<name>.deb, while the CI workflows download each artifact into
+# its own directory (dist/shim/, dist/ifupdown2/) so that the exactly-one-.deb
+# assertion in the resolve step has something unambiguous to assert against.
+# An earlier revision listed only the flat form; the local build kept working
+# and every CI image build failed at COPY with "not found", because the file
+# was never in the transferred context in the first place.
 dist/
 !dist/pve-container-shim_*_all.deb
+!dist/**/pve-container-shim_*_all.deb
 # ifupdown2 is built from git.proxmox.com because Proxmox publishes it into
-# binary-amd64 only; the Containerfile takes it as IFUPDOWN2_DEB, also a
-# context-relative path, so it needs the same re-inclusion.
+# binary-amd64 only.
 !dist/ifupdown2_*_all.deb
+!dist/**/ifupdown2_*_all.deb
