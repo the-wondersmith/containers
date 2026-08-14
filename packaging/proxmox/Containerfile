@@ -367,7 +367,7 @@ VOLUME ["/var/lib/vz", "/var/lib/pve-cluster"]
 # certificate it generates at first start; curl is confirmed present in the
 # proxmox-ve dependency closure.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-  CMD ["/usr/local/lib/pve/lib/healthcheck.sh"]
+  CMD ["bash", "/usr/local/lib/pve/lib/healthcheck.sh"]
 
 # The index-level annotation (org.opencontainers.image.*) is set separately
 # by the CI merge job that combines the per-arch manifests.  This LABEL is
