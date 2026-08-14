@@ -13,11 +13,20 @@
 # either.  If you find yourself wanting an arch branch, stop and report why
 # first rather than adding one.
 
+ARG TARGETOS
+ARG TARGETARCH
+
 FROM docker.io/library/debian:trixie-slim
 
 # Enable bash and pipefail for all subsequent RUN instructions so that pipes
 # fail immediately on error and bash constructs are available.
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Add the latest version of `yq`
+ARG TARGETOS
+ARG TARGETARCH
+
+ADD --chmod=755 "https://github.com/mikefarah/yq/releases/latest/download/yq_${TARGETOS}_${TARGETARCH}" /usr/bin/yq
 
 # ---------------------------------------------------------------------------
 # ARG: path to the locally-built pve-container-shim deb, relative to the
@@ -361,17 +370,18 @@ VOLUME ["/var/lib/vz", "/var/lib/pve-cluster"]
 # certificate it generates at first start; curl is confirmed present in the
 # proxmox-ve dependency closure.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-  CMD ["curl", "-fsSk", "https://127.0.0.1:8006/"]
+  CMD ["bash", "/usr/local/lib/pve/lib/healthcheck.sh"]
 
 # The index-level annotation (org.opencontainers.image.*) is set separately
 # by the CI merge job that combines the per-arch manifests.  This LABEL is
 # the per-arch config-level copy, present in each single-arch image's config
 # object.
-LABEL org.opencontainers.image.source="https://github.com/the-wondersmith/containers" \
+LABEL dev.wondersmith.pve.shim-version="${SHIM_VERSION}" \
   org.opencontainers.image.title="Proxmox VE" \
-  org.opencontainers.image.description="Proxmox VE container image with pve-container-shim for OCI compatibility" \
   org.opencontainers.image.licenses="AGPL-3.0-or-later" \
-  dev.wondersmith.pve.shim-version="${SHIM_VERSION}"
+  org.opencontainers.image.source="https://github.com/the-wondersmith/containers" \
+  org.opencontainers.image.description="Proxmox VE container image with pve-container-shim for OCI compatibility"
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
 CMD ["/sbin/init"]
