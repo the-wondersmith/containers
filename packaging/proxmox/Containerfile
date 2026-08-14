@@ -23,6 +23,9 @@ FROM docker.io/library/debian:trixie-slim
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Add the latest version of `yq`
+ARG TARGETOS
+ARG TARGETARCH
+
 ADD --chmod=755 "https://github.com/mikefarah/yq/releases/latest/download/yq_${TARGETOS}_${TARGETARCH}" /usr/bin/yq
 
 # ---------------------------------------------------------------------------
