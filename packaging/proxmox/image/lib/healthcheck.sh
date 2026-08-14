@@ -3,6 +3,7 @@
 
 set -euo pipefail
 
+mkdir -p /run/pve
 touch /run/pve/healthcheck.token
 
 RUNNER='oci-runtime'
