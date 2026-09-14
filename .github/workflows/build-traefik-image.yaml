@@ -1,0 +1,541 @@
+---
+name: Build Traefik image
+
+# Builds a multi-arch OCI image containing both `traefik` and `traefik-manager`
+# and pushes it to GHCR as a merged manifest list.
+#
+# Set push=false (the default) to validate the build without writing to the
+# registry. Set push=true to publish: the image is pushed by digest, attested
+# per arch, and merged into a multi-arch index with the full tag set applied.
+
+# NOTE: the two input blocks below are duplicated rather than shared via a YAML
+# anchor. GitHub's workflow parser rejects anchors and merge keys outright
+# ("Anchors are not currently supported"), so `inputs: &INPUTS` /
+# `<<: *INPUTS` fails at parse time -- the workflow never appears in the Actions
+# UI and never runs. Duplication is the only option until actions/runner#1182
+# lands.
+on:
+  workflow_call:
+    inputs:
+      op-version:
+        type: string
+        default: latest
+        required: false
+        description: >-
+          Tag of docker.io/1password/op to lift the `op` CLI from. `latest`
+          tracks upstream; pin to a concrete tag for reproducible builds.
+      yq-version:
+        type: string
+        default: latest
+        required: false
+        description: >-
+          Tag of ghcr.io/mikefarah/yq to lift the `yq` binary from.
+      uv-version:
+        type: string
+        default: python3.14-alpine
+        required: false
+        description: >-
+          Tag of ghcr.io/astral-sh/uv used as the runtime base image. MUST be
+          one of the `pythonX.Y-alpine` flavours -- the bare `latest` tag is a
+          scratch image containing only the `uv` binary, with no shell, no apk,
+          and no python, so every RUN in the Containerfile fails.
+      traefik-version:
+        type: string
+        default: latest
+        required: false
+        description: >-
+          Upstream traefik version as bare semver, e.g. 3.7.13, or `latest` to
+          resolve the newest GitHub release. Any leading `v` is stripped; the
+          bare form is what both the image tag set and the FROM lines use.
+      manager-version:
+        type: string
+        default: latest
+        required: false
+        description: >-
+          Upstream traefik-manager version as bare semver, e.g. 1.13.5, or
+          `latest` to resolve the newest GitHub release.
+      push:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          When false (the default), build only -- no registry writes, no
+          attestations, no manifest merge. Set to true to publish.
+
+  workflow_dispatch:
+    inputs:
+      op-version:
+        type: string
+        default: latest
+        required: false
+        description: Tag of docker.io/1password/op to lift the `op` CLI from.
+      yq-version:
+        type: string
+        default: latest
+        required: false
+        description: Tag of ghcr.io/mikefarah/yq to lift the `yq` binary from.
+      uv-version:
+        type: string
+        default: python3.14-alpine
+        required: false
+        description: Runtime base tag; must be a pythonX.Y-alpine flavour.
+      traefik-version:
+        type: string
+        default: latest
+        required: false
+        description: Upstream traefik version as bare semver, or `latest`.
+      manager-version:
+        type: string
+        default: latest
+        required: false
+        description: Upstream traefik-manager version as bare semver, or `latest`.
+      push:
+        required: false
+        type: boolean
+        default: false
+        description: When false, build only. Set to true to push and attest.
+
+# The group is a literal rather than ${{ github.workflow }}: inside a called
+# reusable workflow that expression resolves to the *caller's* workflow name,
+# so a caller and the workflow it calls computed the same group and the nested
+# job queued behind the run that was waiting for it -- a deadlock GitHub
+# reports as a run failure with the calling job never appearing at all.
+concurrency:
+  group: traefik-image-${{ github.ref }}
+  cancel-in-progress: >-
+    ${{ !(startsWith(github.ref, 'refs/tags/') || github.ref_name == github.event.repository.default_branch) }}
+
+# Read-only by default. `packages: write`, `id-token: write`, and
+# `attestations: write` are granted per job, only to the two jobs that
+# actually write to the registry.
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Resolve both upstream versions exactly once, up front.
+  #
+  # This MUST NOT live inside the build matrix. Two matrix legs each calling
+  # `gh api .../releases/latest` can straddle an upstream release and resolve
+  # different versions, producing a manifest list whose amd64 and arm64 members
+  # ship different traefik builds. Job-level outputs from a matrix are also
+  # last-writer-wins across legs, so the tag set the merge job reads would be
+  # whichever leg happened to finish last.
+  # ─────────────────────────────────────────────────────────────────────────────
+  resolve:
+    name: resolve versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      # The three tags the merge job applies alongside `latest`, pre-composed
+      # here so the `tags:` block stays readable. primary-tag is also the
+      # reference the post-push assertions inspect.
+      minor-tag: ${{ steps.versions.outputs.minor-tag }}
+      major-tag: ${{ steps.versions.outputs.major-tag }}
+      primary-tag: ${{ steps.versions.outputs.primary-tag }}
+      traefik-version: ${{ steps.versions.outputs.traefik-version }}
+      manager-version: ${{ steps.versions.outputs.manager-version }}
+    steps:
+      - name: Resolve `traefik` & `traefik-manager` versions
+        id: versions
+        shell: bash
+        env:
+          # `gh` reads GH_TOKEN, not GITHUB_TOKEN. Without it every `gh api`
+          # call fails with `gh: To use GitHub CLI in a GitHub Actions
+          # workflow, set the GH_TOKEN environment variable` -- which under
+          # `set -e` aborts the step, but under a bare command substitution
+          # would instead assign an empty version and fail the regex check
+          # several lines later with a misleading message.
+          GH_TOKEN: ${{ github.token }}
+          TRAEFIK_VERSION: ${{ inputs.traefik-version }}
+          MANAGER_VERSION: ${{ inputs.manager-version }}
+        run: |
+          set -euo pipefail
+
+          readonly jq_filter='map(.tag_name | select(test("^v?[0-9.]+$")) | gsub("[^0-9.]"; "")) | max_by(split(".") | map(tonumber))'
+
+          # Both upstreams tag their GitHub releases `vX.Y.Z`; strip everything
+          # that is not a digit or a dot so the resolved value is bare semver.
+          # Bare is the one spelling that works everywhere downstream: it is
+          # what the image tag set is built from, and it is what both source
+          # registries accept. ghcr.io/traefik/traefik publishes `3.7.13`
+          # alongside `v3.7.13`, and ghcr.io/chr0nzz/traefik-manager publishes
+          # the bare form only. The Containerfile's FROM lines therefore take
+          # these values verbatim -- no per-component `v` handling anywhere.
+          if [[ "${TRAEFIK_VERSION}" == 'latest' ]]; then
+            TRAEFIK_VERSION="$(gh api repos/traefik/traefik/releases --jq="${jq_filter}")"
+          fi
+
+          if [[ "${MANAGER_VERSION}" == 'latest' ]]; then
+            MANAGER_VERSION="$(gh api repos/chr0nzz/traefik-manager/releases --jq="${jq_filter}")"
+          fi
+
+          if [[ ! "${TRAEFIK_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::traefik version must be 'latest' or '{major}.{minor}.{patch}', not '${TRAEFIK_VERSION}'"
+            exit 1
+          fi
+
+          if [[ ! "${MANAGER_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::traefik-manager version must be 'latest' or '{major}.{minor}.{patch}', not '${MANAGER_VERSION}'"
+            exit 1
+          fi
+
+          # Split into components for the mutable convenience aliases.
+          IFS=. read -r traefik_major traefik_minor _ <<< "${TRAEFIK_VERSION}"
+          IFS=. read -r manager_major manager_minor _ <<< "${MANAGER_VERSION}"
+
+          {
+            echo "traefik-version=${TRAEFIK_VERSION}"
+            echo "manager-version=${MANAGER_VERSION}"
+            echo "primary-tag=${TRAEFIK_VERSION}-${MANAGER_VERSION}"
+            echo "minor-tag=${traefik_major}.${traefik_minor}-${manager_major}.${manager_minor}"
+            echo "major-tag=${traefik_major}-${manager_major}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "traefik ${TRAEFIK_VERSION} + traefik-manager ${MANAGER_VERSION}" >> "${GITHUB_STEP_SUMMARY}"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Build one per-arch image leg. When push=true, each leg pushes by digest
+  # (no tag yet), uploads its digest, and attests its own provenance. When
+  # push=false, the image is built locally and discarded -- registry state is
+  # never touched.
+  # ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: image / ${{ matrix.arch }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # `arch` MUST be a real matrix dimension, not something contributed only
+        # by `include`. An `include` entry that does not overwrite an original
+        # matrix value is applied to *every* combination, so listing the two
+        # arches in `include` alone produces one job rather than two.
+        arch:
+          - amd64
+          - arm64
+        # Now that `arch` is an original dimension, these attach the right
+        # runner to each combination that already matches on that arch value.
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # No step here pushes with git; do not leave the token on disk.
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      # Not gated on `inputs.push`. Four of the five source images the
+      # Containerfile pulls live on GHCR, and logging in writes nothing -- it
+      # only moves those pulls off the anonymous rate limit, which a push=false
+      # validation build benefits from just as much as a publishing one.
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          # The Containerfile's `COPY overlay/. /` is context-relative, so the
+          # context is the container directory, not the repo root.
+          context: containers/traefik
+          file: containers/traefik/Containerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            OP_VERSION=${{ inputs.op-version }}
+            YQ_VERSION=${{ inputs.yq-version }}
+            UV_VERSION=${{ inputs.uv-version }}
+            TRAEFIK_VERSION=${{ needs.resolve.outputs.traefik-version }}
+            MANAGER_VERSION=${{ needs.resolve.outputs.manager-version }}
+          # provenance: false because we attest with attest-build-provenance
+          # below, not via buildkit's inline mechanism. buildkit's inline
+          # provenance embeds the attestation in a separate manifest and does
+          # not carry the reusable-workflow signer identity; the explicit
+          # attestation does. Leaving both active would push duplicate,
+          # mismatched attestation manifests for the same digest.
+          provenance: false
+          outputs: >-
+            ${{ inputs.push && format('type=image,name=ghcr.io/{0}/traefik,push-by-digest=true,name-canonical=true,push=true', github.repository) || 'type=docker' }}
+          cache-from: type=gha,scope=traefik-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=traefik-${{ matrix.arch }}
+
+      - name: Attest build provenance
+        if: inputs.push
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          push-to-registry: true
+          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-name: ghcr.io/${{ github.repository }}/traefik
+
+      - name: Export digest for merge
+        if: inputs.push
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          digest_dir="${RUNNER_TEMP}/digests"
+          mkdir -p "${digest_dir}"
+
+          # The filename IS the digest (hex only; `sha256:` prefix stripped).
+          # The merge job reconstructs the full reference by prepending
+          # `sha256:` to each basename it finds. Using the filename avoids a
+          # separate metadata file and makes the artifact self-describing.
+          touch "${digest_dir}/${DIGEST#sha256:}"
+
+      - name: Upload digest artifact
+        if: inputs.push
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          retention-days: 1
+          if-no-files-found: error
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Merge the two per-arch digests into a single OCI image index, apply the
+  # full tag set, add the version annotations, and attest the index.
+  # Skipped entirely when push=false.
+  # ─────────────────────────────────────────────────────────────────────────────
+  merge:
+    needs:
+      - resolve
+      - build
+    if: inputs.push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+
+    env:
+      # Tells docker/metadata-action to emit annotations at the index
+      # level rather than on individual manifest descriptors.
+      DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+      IMAGE_REPO: ghcr.io/${{ github.repository }}/traefik
+      PRIMARY_TAG: ghcr.io/${{ github.repository }}/traefik:${{ needs.resolve.outputs.primary-tag }}
+      TRAEFIK_VERSION: ${{ needs.resolve.outputs.traefik-version }}
+      MANAGER_VERSION: ${{ needs.resolve.outputs.manager-version }}
+
+    steps:
+      # Without this the per-arch digests never reach the runner and the
+      # `digest_refs` array below is empty, so `imagetools create` is invoked
+      # with tags but no sources.
+      - name: Download digest artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}/traefik
+          # `{traefik-version}-{manager-version}` is the primary tag, because
+          # those two upstream versions are the only things that define what
+          # this image actually is. Everything under `overlay/` is glue: s6
+          # service definitions, a health check, and a few libexec helpers
+          # whose entire purpose is to run both binaries side by side in one
+          # container. It does not patch, wrap, or otherwise change the
+          # behavior of either component, so it has no business in the version.
+          #
+          # This is a deliberate departure from the proxmox image, where
+          # immutability is a hard requirement and `pkgrel` exists so that every
+          # rebuild -- including a packaging-only one -- is separately
+          # addressable and pinnable. This image is a convenience bundle, not a
+          # deployment substrate: a rebuild at the same pair of upstream
+          # versions is expected to overwrite the tag. Pin by digest if you need
+          # a fixed artifact.
+          #
+          # The remaining tags are mutable aliases, updated on every release.
+          tags: |
+            type=raw,value=${{ needs.resolve.outputs.primary-tag }}
+            type=raw,value=${{ needs.resolve.outputs.minor-tag }}
+            type=raw,value=${{ needs.resolve.outputs.major-tag }}
+            type=raw,value=latest
+
+      - name: Create and push multi-arch manifest
+        shell: bash
+        env:
+          DIGESTS_DIR: ${{ runner.temp }}/digests
+          # Newline-separated `index:<key>=<value>` pairs -- the standard OCI
+          # set (org.opencontainers.image.created, .revision, .source, .version,
+          # ...) that metadata-action derives from the run context. The `index:`
+          # prefix is applied by metadata-action itself, driven by the job-level
+          # DOCKER_METADATA_ANNOTATIONS_LEVELS; that variable does nothing
+          # unless these values actually reach imagetools, which is why they are
+          # spliced into the command below rather than left on the floor.
+          #
+          # NOT reachable via DOCKER_METADATA_OUTPUT_JSON: that document carries
+          # `tags` and `labels` only. Annotations have their own output.
+          METADATA_ANNOTATIONS: ${{ steps.meta.outputs.annotations }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+
+          # Reconstruct full digest references from the filenames written by
+          # the per-arch build legs (each filename is the hex digest, with the
+          # `sha256:` prefix stripped).
+          digest_refs=()
+
+          for f in "${DIGESTS_DIR}"/*; do
+            digest_refs+=("${IMAGE_REPO}@sha256:$(basename "${f}")")
+          done
+
+          if (( ${#digest_refs[@]} == 0 )); then
+            echo "::error::no digests downloaded -- did both build legs upload their artifact?"
+            exit 1
+          fi
+
+          if (( ${#digest_refs[@]} == 1 )); then
+            echo "::error::too few digests downloaded -- one of the build legs failed to upload their artifact."
+            exit 1
+          fi
+
+          if (( ${#digest_refs[@]} > 2 )); then
+            echo "::error::too many digests downloaded -- something is horribly wrong in one or both of the build legs."
+            exit 1
+          fi
+
+          # Build the --tag flags into an array. `mapfile` reads alternating
+          # `-t` / <value> lines from jq, which avoids the word-splitting that
+          # an unquoted $() substitution would require.
+          #
+          # DOCKER_METADATA_OUTPUT_JSON holds the JSON *document*, not a path to
+          # one. An earlier revision passed it to jq as a filename, so jq tried
+          # to open the entire tag set as a file, reported `Could not open file
+          # {"tags":[...]}` and produced nothing. The array came out empty, the
+          # imagetools call ran with no --tag at all, and buildx refused with
+          # `can't push with no tags specified` -- an error naming the symptom
+          # several steps downstream of the cause. Read it from the variable.
+          mapfile -t tag_args < <(jq -r '.tags[] | "-t", .' <<< "${DOCKER_METADATA_OUTPUT_JSON}")
+
+          # A read loop rather than the mapfile-plus-word-splitting used above:
+          # annotation *values* contain spaces (image.description, image.title),
+          # so each line has to survive as a single argv element.
+          ann_args=()
+
+          while IFS= read -r annotation; do
+            [[ -n "${annotation}" ]] && ann_args+=(--annotation "${annotation}")
+          done <<< "${METADATA_ANNOTATIONS}"
+
+          # The `index:` prefix is MANDATORY. Without it, buildx routes the
+          # annotation to `manifest-descriptor:`, attaching it to the per-arch
+          # manifest entries rather than to the OCI image index -- the
+          # annotation is then invisible when inspecting the merged index.
+          # See docker/buildx#2153.
+          #
+          # The two trailing annotations are upstream *product* versions, which
+          # is why they are written by hand in each vendor's own namespace
+          # rather than coming from metadata-action's build-metadata set.
+          docker buildx imagetools create \
+            "${tag_args[@]}" \
+            "${ann_args[@]}" \
+            --annotation "index:io.traefik.version=${TRAEFIK_VERSION}" \
+            --annotation "index:dev.xyzlab.chr0nzz.traefik-manager.version=${MANAGER_VERSION}" \
+            "${digest_refs[@]}"
+
+      - name: Assert manifest structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # --raw is MANDATORY. docker buildx imagetools inspect in pretty-print
+          # mode silently omits index-level annotations from its output
+          # (docker/buildx#2153). Only --raw returns the full OCI JSON with
+          # the index annotations intact.
+          raw="$(docker buildx imagetools inspect --raw "${PRIMARY_TAG}")"
+
+          # 1. Assert both architectures are present in the manifest list.
+          expected='["amd64","arm64"]'
+          actual="$(jq -c '.manifests | map(.platform.architecture) | sort' <<< "${raw}")"
+
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::expected architectures ${expected}, got ${actual}"
+            exit 1
+          fi
+
+          echo "architectures OK: ${actual}"
+
+          # 2. Assert both version annotations survived the push.
+          assert_annotation() {
+            local key="$1" want="$2" got
+
+            got="$(jq -r --arg k "${key}" '.annotations[$k] // "<missing>"' <<< "${raw}")"
+
+            if [[ "${got}" != "${want}" ]]; then
+              echo "::error::${key}: expected '${want}', got '${got}'"
+              exit 1
+            fi
+
+            echo "${key} OK: ${got}"
+          }
+
+          assert_annotation io.traefik.version "${TRAEFIK_VERSION}"
+          assert_annotation dev.xyzlab.chr0nzz.traefik-manager.version "${MANAGER_VERSION}"
+
+          # 3. Assert the index mediaType is an OCI image index.
+          media_type="$(jq -r '.mediaType' <<< "${raw}")"
+
+          if [[ "${media_type}" != "application/vnd.oci.image.index.v1+json" ]]; then
+            echo "::error::unexpected mediaType '${media_type}'; expected OCI image index"
+            exit 1
+          fi
+
+          echo "mediaType OK: ${media_type}"
+
+      - name: Resolve index digest
+        id: index-digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Derive the digest from the raw index bytes rather than asking
+          # buildx for it.  There is no top-level .Digest field -- the field is
+          # .Manifest.Digest -- and docker/buildx#1175 means a --format template
+          # naming it is ignored entirely, printing the pretty-print output
+          # instead.  That failure is silent: the attestation subject would be a
+          # human-readable blob rather than a digest, and nothing downstream
+          # would notice.  A digest is by definition the sha256 of the bytes it
+          # names, so hashing --raw output cannot drift with a field rename.
+          digest="sha256:$(docker buildx imagetools inspect --raw "${PRIMARY_TAG}" | sha256sum | cut -d' ' -f1)"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest index provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          push-to-registry: true
+          subject-name: ghcr.io/${{ github.repository }}/traefik
+          subject-digest: ${{ steps.index-digest.outputs.digest }}

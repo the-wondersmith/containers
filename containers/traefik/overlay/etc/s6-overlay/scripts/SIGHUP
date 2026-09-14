@@ -1,0 +1,11 @@
+#!/command/execlineb -P
+
+# s6-svscan diverts SIGHUP to this script when it exists. s6-linux-init-maker
+# does not generate one (it only emits TERM QUIT INT USR1 USR2 PWR WINCH), so
+# the svscan-sighup oneshot copies this into /run/service/.s6-svscan/ at boot.
+#
+# traefik registers its SIGHUP handler inside the file provider's Provide().
+# With no `providers.file` in the static config there is no handler, and Go's
+# default disposition terminates the process instead of reloading.
+
+s6-svc -h /run/service/traefik

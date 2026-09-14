@@ -1,0 +1,74 @@
+# syntax=docker/dockerfile:1.27
+
+ARG OP_VERSION='latest'
+ARG YQ_VERSION='latest'
+ARG TRAEFIK_VERSION='latest'
+ARG MANAGER_VERSION='latest'
+ARG UV_VERSION='python3.14-alpine'
+
+FROM ghcr.io/mikefarah/yq:${YQ_VERSION} AS yq
+FROM docker.io/1password/op:${OP_VERSION} AS onepassword
+FROM ghcr.io/traefik/traefik:${TRAEFIK_VERSION} AS traefik
+FROM ghcr.io/chr0nzz/traefik-manager:${MANAGER_VERSION} AS manager
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS runner
+
+ARG TARGETARCH
+ARG S6_VERSION="3.2.3.2"
+ARG ARCH=${TARGETARCH/amd64/x86_64}
+ARG TARGET_ARCH=${ARCH/arm64/aarch64}
+
+LABEL org.opencontainers.image.source=https://github.com/the-wondersmith/containers
+
+ADD --unpack "https://github.com/just-containers/s6-overlay/releases/download/v${S6_VERSION}/s6-overlay-noarch.tar.xz" /
+ADD --unpack "https://github.com/just-containers/s6-overlay/releases/download/v${S6_VERSION}/s6-overlay-${TARGET_ARCH}.tar.xz" /
+ADD --unpack "https://github.com/just-containers/s6-overlay/releases/download/v${S6_VERSION}/s6-overlay-symlinks-arch.tar.xz" /
+ADD --unpack "https://github.com/just-containers/s6-overlay/releases/download/v${S6_VERSION}/s6-overlay-symlinks-noarch.tar.xz" /
+
+COPY --from=yq /usr/bin/yq /usr/local/bin/yq
+COPY --from=onepassword /usr/local/bin/op /usr/local/bin/op
+COPY --from=traefik /usr/local/bin/traefik /usr/local/bin/traefik
+COPY --from=manager \
+      --exclude='*.md' \
+      --exclude='agent/' \
+      --exclude='config/' \
+      --exclude='backups/' \
+      --exclude='**/.venv' \
+      --exclude='**/.git*' \
+      --exclude='.env.example' \
+      --exclude='.dockerignore' \
+      --exclude='renovate.json' \
+      --exclude='wrangler.toml' \
+      --exclude='tailwind.config.js' \
+      /app /usr/local/etc/traefik-manager
+
+RUN apk add --update --no-cache fd eza bash ripgrep \
+    && uv --directory /usr/local/etc/traefik-manager venv --clear --force --no-config --no-project --link-mode symlink \
+    && uv --directory /usr/local/etc/traefik-manager pip install --no-cache-dir -r requirements.txt gunicorn \
+    && rm -f /usr/local/etc/traefik-manager/requirements.txt \
+    && ln -sfn /bin/bash /bin/sh \
+    && ln -sfn /usr/bin/eza /bin/ls
+
+COPY overlay/. /
+
+EXPOSE 80/tcp
+EXPOSE 443/tcp
+
+ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
+    BACKUP_KEEP_COUNT=2 \
+    COOKIE_SECURE='false' \
+    RESTART_METHOD='poison-pill' \
+    CONFIG_DIR='/etc/traefik/config.d/' \
+    TRAEFIK_INSECURE_SKIP_VERIFY='true' \
+    TRAEFIK_API_URL='http://127.0.0.1:8080' \
+    BACKUP_DIR='/run/traefik-manager/backups' \
+    SIGNAL_FILE_PATH='/run/traefik/restart.sig' \
+    ACME_JSON_PATH='/etc/traefik/tls/acme.json' \
+    STATIC_CONFIG_PATH='/etc/traefik/config.yaml' \
+    ACCESS_LOG_PATH='/var/log/traefik/access.log' \
+    CONFIG_PATH='/etc/traefik/config.d/managed.yaml' \
+    SETTINGS_PATH='/run/traefik-manager/settings.yaml'
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD /usr/local/bin/healthcheck
+
+ENTRYPOINT ["/init"]

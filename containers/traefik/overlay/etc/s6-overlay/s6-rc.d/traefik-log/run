@@ -1,0 +1,6 @@
+#!/command/execlineb -P
+
+# p[traefik] tags each line, 1 writes to stdout so `docker logs` still works.
+# -d3 matches notification-fd, so s6-rc waits for the logger to be ready.
+
+s6-log -d3 -b -- p[traefik] 1

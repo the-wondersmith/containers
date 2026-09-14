@@ -1,0 +1,90 @@
+---
+api:
+  debug: true
+  insecure: true
+  dashboard: true
+  disabledashboardad: true
+
+ping:
+  entryPoint: traefik
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+metrics:
+  addInternals: true
+
+hostResolver:
+  cnameFlattening: false
+
+experimental:
+  otlpLogs: true
+  abortOnPluginFailure: true
+  fastProxy:
+    debug: true
+
+log:
+  level: INFO
+  noColor: true
+  format: common
+  filePath: /dev/stdout
+
+accessLog:
+  format: json
+  bufferingSize: 0
+  filePath: /var/log/traefik/access.log
+  filters:
+    minDuration: 2ms
+    retryAttempts: true
+    statusCodes:
+      - 200-299
+      - 300-399
+      - 400-599
+  fields:
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+
+certificatesResolvers:
+  lets-encrypt:
+    acme:
+      email: traefik@local.container.io
+      storage: /etc/traefik/tls/acme.json
+      caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      httpChallenge:
+        entryPoint: web
+
+entryPoints:
+  traefik:
+    reusePort: true
+    address: 127.0.0.1:8080
+    http: &HTTP
+      aliasHeadersStrategy: delete
+      encodedCharacters:
+        allowEncodedHash: false
+        allowEncodedSlash: false
+        allowEncodedPercent: false
+        allowEncodedBackSlash: false
+        allowEncodedSemicolon: false
+        allowEncodedQuestionMark: false
+        allowEncodedNullCharacter: false
+
+  web:
+    address: :80
+    reusePort: true
+    http:
+      <<: *HTTP
+
+  websecure:
+    address: :443
+    reusePort: true
+    http:
+      <<: *HTTP
+
+providers:
+  file:
+    directory: /etc/traefik/config.d/
+  docker:
+    endpoint: unix:///var/run/docker.sock

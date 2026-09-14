@@ -1,0 +1,35 @@
+---
+http:
+  routers:
+    manager:
+      service: manager
+      rule: Host(`traefik.local`)
+      entryPoints:
+        - web
+        - websecure
+    dashboard:
+      service: dashboard
+      rule: Host(`internal.traefik.local`)
+      entryPoints:
+        - web
+        - websecure
+
+  services:
+    manager:
+      loadBalancer:
+        servers:
+          - url: http://127.0.0.1:5000
+            preservePath: true
+        healthcheck:
+          timeout: 3s
+          interval: 10s
+          path: /api/health
+          followRedirects: false
+          headers:
+            User-Agent: traefik
+
+    dashboard:
+      loadBalancer:
+        servers:
+          - url: http://127.0.0.1:8080
+            preservePath: true
