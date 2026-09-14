@@ -42,6 +42,7 @@ COPY --from=manager \
       --exclude='tailwind.config.js' \
       /app /usr/local/etc/traefik-manager
 
+# hadolint ignore=DL3018,DL4005
 RUN apk add --update --no-cache fd eza bash ripgrep \
     && uv --directory /usr/local/etc/traefik-manager venv --clear --force --no-config --no-project --link-mode symlink \
     && uv --directory /usr/local/etc/traefik-manager pip install --no-cache-dir -r requirements.txt gunicorn \
@@ -69,6 +70,6 @@ ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     CONFIG_PATH='/etc/traefik/config.d/managed.yaml' \
     SETTINGS_PATH='/run/traefik-manager/settings.yaml'
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD /usr/local/bin/healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD ["/usr/local/bin/healthcheck"]
 
 ENTRYPOINT ["/init"]
