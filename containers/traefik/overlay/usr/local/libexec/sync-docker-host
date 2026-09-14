@@ -13,9 +13,9 @@ if [[ -z "${config}" ]] || [[ ! -f "${config}" ]]; then
   exit 0
 fi
 
-if [[ -n "${DOCKER_HOST}" ]] && [[ -S "${socket}" ]]; then
+if [[ -n "${DOCKER_HOST:-}" ]] && [[ -S "${socket}" ]]; then
   yq -iPo yaml 'with(.providers.docker; .endpoint = env(DOCKER_HOST))' "${config}"
-  printf '[traefik-config] set `.providers.docker.endpoint` to: %s\n' "${DOCKER_HOST}"
+  printf '[traefik-config] set `.providers.docker.endpoint` to: %s\n' "${DOCKER_HOST:-}"
 else
   yq -iPo yaml 'del(.providers.docker)' "${config}"
   printf '[traefik-config] removed `.providers.docker` from traefik config\n'
