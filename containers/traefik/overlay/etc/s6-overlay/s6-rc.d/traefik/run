@@ -1,0 +1,11 @@
+#!/command/execlineb -P
+# shellcheck shell=sh
+
+# fdmove -c 2 1 -> fold stderr into the logger pipe; traefik writes there too.
+# with-contenv  -> the supervision tree runs with an empty environment
+#                  (s6-linux-init-maker -s /run/s6/container_environment);
+#                  this is also what picks up what op-secrets rendered.
+
+fdmove -c 2 1
+with-contenv
+/usr/local/bin/traefik --configfile=/etc/traefik/config.yaml

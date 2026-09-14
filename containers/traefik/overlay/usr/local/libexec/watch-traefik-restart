@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Polls for the file Traefik Manager writes under RESTART_METHOD=poison-pill and
+# bounces traefik alone. s6-supervise restarts it, so SIGTERM is the whole job --
+# the reference `kill -TERM 1` would hit s6-svscan and stop the container.
+
+set -euo pipefail
+
+readonly signal_file="${SIGNAL_FILE_PATH:-/signals/restart.sig}"
+
+# No SIGTERM trap on purpose: bash's default disposition lets s6 stop this
+# immediately instead of waiting out the current sleep.
+while true; do
+  if [[ -f "${signal_file}" ]]; then
+    rm -f "${signal_file}"
+    printf '[traefik-restart] signal file seen, restarting traefik\n'
+    s6-svc -t /run/service/traefik
+  fi
+
+  sleep 2
+done

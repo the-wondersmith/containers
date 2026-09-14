@@ -1,0 +1,11 @@
+#!/command/execlineb -P
+# shellcheck shell=sh
+
+# `up` script of the svscan-sighup oneshot.
+#
+# The scandir at /run/service is rebuilt from basedir/run-image on every boot,
+# so the SIGHUP handler cannot be baked into the image. s6-svscan exec's
+# .s6-svscan/SIGHUP at signal time rather than reading it at startup, which is
+# why dropping it in after boot works.
+
+s6-hiercopy /etc/s6-overlay/scripts/SIGHUP /run/service/.s6-svscan/SIGHUP

@@ -138,7 +138,9 @@ jobs:
         # loudly; the amd64 image simply never builds. The merge job then
         # pushes a manifest list that claims amd64 but contains only arm64
         # layers.
-        arch: [amd64, arm64]
+        arch:
+          - amd64
+          - arm64
         # Now that `arch` is an original dimension, these attach the right
         # runner to each combination that already matches on that arch value.
         include:
@@ -233,8 +235,8 @@ jobs:
           # attestation does. Leaving both active would push duplicate,
           # mismatched attestation manifests for the same digest.
           provenance: false
-          outputs: >-
-            ${{ inputs.push && format('type=image,name=ghcr.io/{0}/proxmox,push-by-digest=true,name-canonical=true,push=true', github.repository) || 'type=docker' }}
+          # yamllint disable-line rule:line-length
+          outputs: ${{ inputs.push && format('type=image,name=ghcr.io/{0}/proxmox,push-by-digest=true,name-canonical=true,push=true', github.repository) || 'type=docker' }}
           cache-from: type=gha,scope=proxmox-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=proxmox-${{ matrix.arch }}
 

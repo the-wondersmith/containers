@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash disable=SC2016
+
+set -euo pipefail
+
+shopt -s expand_aliases
+
+# `traefik healthcheck --ping` requires `ping` to be enabled in the static
+# config; without it this always fails. wget is busybox's, not GNU's -- the
+# image has no curl.
+
+alias traefik-health='traefik healthcheck --ping --configfile=/etc/traefik/config.yaml'
+alias manager-health='wget -O- --quiet --timeout=2 --header "User-Agent: docker" "http://127.0.0.1:5000/api/health"'
+
+if ! traefik-health > /dev/null 2>&1; then
+  printf '%s [HEALTHCHECK] ⚠️ failed to ping `traefik`\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" 1>&2
+  exit 1
+elif ! manager-health > /dev/null 2>&1; then
+  printf '%s [HEALTHCHECK] ⚠️ failed to ping `traefik-manager`\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" 1>&2
+  exit 1
+fi
+
+exit 0

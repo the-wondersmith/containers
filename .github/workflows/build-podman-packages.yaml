@@ -109,8 +109,15 @@ jobs:
         # on aarch64. Nothing failed loudly: the x86_64 components simply never
         # built, and the error surfaced two jobs later as a missing .apk in the
         # packaging steps.
-        component: [catatonit, netavark, aardvark-dns, buildah, podman]
-        arch: [x86_64, aarch64]
+        component:
+          - catatonit
+          - netavark
+          - aardvark-dns
+          - buildah
+          - podman
+        arch:
+          - x86_64
+          - aarch64
         # Now that `arch` is an original value, these attach a runner to the
         # existing combinations that already match on it.
         include:

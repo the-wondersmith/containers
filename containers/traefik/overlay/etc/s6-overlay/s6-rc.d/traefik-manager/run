@@ -1,0 +1,8 @@
+#!/command/execlineb -P
+
+# gunicorn is exec'd straight out of the venv rather than through `uv run`, so
+# SIGTERM from s6-supervise lands on the master process with nothing in between.
+
+fdmove -c 2 1
+with-contenv
+/usr/local/etc/traefik-manager/.venv/bin/gunicorn --chdir /usr/local/etc/traefik-manager --bind 127.0.0.1:5000 --workers 1 --threads 4 --log-level info --access-logfile - --error-logfile - app:app

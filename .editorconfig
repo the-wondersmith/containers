@@ -2,11 +2,12 @@ root = true
 
 [*]
 charset = utf-8
+indent_size = 2
 end_of_line = lf
+indent_style = space
+max_line_length = 130
 insert_final_newline = true
 trim_trailing_whitespace = true
-indent_style = space
-indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
@@ -35,3 +36,12 @@ indent_style = unset
 [**/debian/changelog]
 indent_size = unset
 indent_style = unset
+
+[**/s6-rc.d/**/run]
+max_line_length = 250
+
+[**/.github/workflows/*.yaml]
+max_line_length = 250
+
+[containers/traefik/overlay/usr/local/libexec/resolve-env-secrets]
+max_line_length = 250
