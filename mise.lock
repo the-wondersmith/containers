@@ -229,7 +229,7 @@ components = "cargo,clippy"
 profile = "default"
 
 [[tools.rust-nightly]]
-version = "nightly"
+version = "nightly-2026-09-14"
 backend = "core:rust"
 
 [tools.rust-nightly.options]
