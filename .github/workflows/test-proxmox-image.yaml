@@ -93,7 +93,9 @@ jobs:
       # would collapse to a single leg and one architecture would silently stop
       # being tested.
       matrix:
-        arch: [amd64, arm64]
+        arch:
+          - amd64
+          - arm64
         include:
           - arch: amd64
             runner: ubuntu-latest

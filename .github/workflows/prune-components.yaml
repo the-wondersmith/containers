@@ -40,7 +40,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [catatonit, netavark, aardvark-dns, buildah, podman]
+        component:
+          - catatonit
+          - netavark
+          - aardvark-dns
+          - buildah
+          - podman
 
     steps:
       - name: Checkout code

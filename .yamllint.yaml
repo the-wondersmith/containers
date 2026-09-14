@@ -34,5 +34,17 @@ rules:
 
   # Align with editorconfig
   line-length:
-    max: 120
+    max: 130
     level: warning
+
+  # Sequences are written in block style (`-` per item), never inline flow
+  # style. Block style diffs one item per line, so adding a matrix arch or a
+  # `needs:` entry shows up as a single added line rather than a rewrite of the
+  # whole sequence -- which matters most for the two places this repo uses
+  # sequences heavily, matrix dimensions and job dependencies.
+  #
+  # `non-empty` rather than `true`: an empty sequence has no block
+  # representation at all, so `[]` is the only way to write one (see
+  # .github/actionlint.yaml's `self-hosted-runner.labels`).
+  brackets:
+    forbid: non-empty
