@@ -41,6 +41,26 @@ Rules-Requires-Root: no
 #   tls: failed to verify certificate: x509: certificate signed by unknown authority
 #
 # A podman that cannot fetch an image is not usefully installed.
+#
+# container-network-stack MUST be in Provides, and is NOT a typo for netavark.
+#
+# Provides is not transitive. Claiming `netavark` does not also claim what the
+# real netavark package claims. Debian's netavark declares
+# `Provides: container-network-stack (= 2)` and containernetworking-plugins
+# declares `container-network-stack (= 1)` -- the number is the stack
+# generation (1 = CNI, 2 = netavark), not the provider's own version, which is
+# why it is hardcoded rather than templated from @NETAVARK_VERSION@.
+#
+# golang-github-containers-common, which this package depends on, depends on
+# container-network-stack. Without the line below, apt has exactly two
+# candidates for that dependency -- netavark and containernetworking-plugins --
+# and this package Conflicts with netavark, so installation fails outright:
+#
+#   Unsatisfied dependencies:
+#    golang-github-containers-common : Depends: container-network-stack
+#
+# The claim is honest: the bundled netavark @NETAVARK_VERSION@ at
+# /usr/libexec/podman IS a generation-2 container network stack.
 
 Package: podman
 Architecture: @ARCH@
@@ -59,7 +79,8 @@ Replaces: netavark, aardvark-dns, catatonit, buildah
 Provides: netavark (= @NETAVARK_VERSION@),
  aardvark-dns (= @AARDVARK_DNS_VERSION@),
  catatonit (= @CATATONIT_VERSION@),
- buildah (= @BUILDAH_VERSION@)
+ buildah (= @BUILDAH_VERSION@),
+ container-network-stack (= 2)
 Description: Self-contained Podman bundle (netavark, aardvark-dns, catatonit, buildah CLI)
  Podman @PODMAN_VERSION@ with every required helper binary bundled under
  /usr/libexec/podman: netavark @NETAVARK_VERSION@ (nftables-only),

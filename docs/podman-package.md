@@ -22,6 +22,13 @@ Because the package writes those binaries into system paths, it has to claim the
 On **Debian** it declares `Conflicts`, `Replaces`, and versioned `Provides` for `netavark`, `aardvark-dns`, `catatonit`, and `buildah`,
 templated to the versions actually bundled — so another package's *versioned* dependency on any of them is satisfied by installing this one.
 
+It also declares `Provides: container-network-stack (= 2)`, which is **not** redundant with the `netavark` entry above it. `Provides` is not
+transitive: claiming the name `netavark` does not also claim what Debian's `netavark` package itself claims. `golang-github-containers-common`
+— a hard dependency of this package — depends on the virtual `container-network-stack`, whose only other providers are `netavark`
+(generation 2) and `containernetworking-plugins` (generation 1, CNI). Since this package conflicts with `netavark`, omitting the line leaves
+apt with no installable candidate and the install fails outright with `Depends: container-network-stack`. The `= 2` is the stack generation,
+not a version of anything bundled, so it is hardcoded rather than templated.
+
 On **Alpine** the same intent needs three mechanisms instead of two:
 
 - `provides` carries the same versioned entries, rewritten at build time from the resolved component set.
