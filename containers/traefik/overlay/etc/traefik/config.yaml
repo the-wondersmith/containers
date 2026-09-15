@@ -86,5 +86,3 @@ entryPoints:
 providers:
   file:
     directory: /etc/traefik/config.d/
-  docker:
-    endpoint: unix:///var/run/docker.sock
