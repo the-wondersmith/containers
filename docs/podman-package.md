@@ -22,12 +22,48 @@ Because the package writes those binaries into system paths, it has to claim the
 On **Debian** it declares `Conflicts`, `Replaces`, and versioned `Provides` for `netavark`, `aardvark-dns`, `catatonit`, and `buildah`,
 templated to the versions actually bundled — so another package's *versioned* dependency on any of them is satisfied by installing this one.
 
+### `container-network-stack`
+
 It also declares `Provides: container-network-stack (= 2)`, which is **not** redundant with the `netavark` entry above it. `Provides` is not
-transitive: claiming the name `netavark` does not also claim what Debian's `netavark` package itself claims. `golang-github-containers-common`
-— a hard dependency of this package — depends on the virtual `container-network-stack`, whose only other providers are `netavark`
-(generation 2) and `containernetworking-plugins` (generation 1, CNI). Since this package conflicts with `netavark`, omitting the line leaves
-apt with no installable candidate and the install fails outright with `Depends: container-network-stack`. The `= 2` is the stack generation,
-not a version of anything bundled, so it is hardcoded rather than templated.
+transitive: claiming the name `netavark` does not also claim what Debian's `netavark` package itself claims.
+`golang-github-containers-common`
+— a hard dependency of this package — depends on the virtual `container-network-stack`, and without the line above, nothing this package
+ships
+answers to that name even though the bundled netavark is exactly what it asks for.
+
+The dependency is **unversioned**, and this package conflicts with only one of the two providers. That leaves these candidates:
+
+| Provider                      | Declares                        | Conflicted here? | Installable on trixie?                           |
+|-------------------------------|---------------------------------|------------------|--------------------------------------------------|
+| `netavark`                    | `container-network-stack (= 2)` | **Yes**          | Never selected                                   |
+| `containernetworking-plugins` | `container-network-stack (= 1)` | No               | **Yes** — 1.1.1+ds1-3 is a normal trixie package |
+
+So there is no constraint making the generation-1 provider unsatisfying, and none is wanted: the `= N` is the stack generation (1 = CNI,
+2 = netavark), not a version of anything bundled, which is why it is hardcoded rather than templated from the netavark version.
+
+The generation-1 provider is a *wrong* answer rather than an impossible one, and that is the actual argument for the line:
+
+- It is CNI, the stack podman removed support for in 5.0. Podman 6.0 cannot use a single binary in it.
+- It declares `Depends: iptables`, which this package deliberately avoids — netavark 2.x deleted all iptables support, which is why
+  `nftables` is a hard dependency here.
+
+Resolving that way would install a dead network stack plus the firewall backend this package exists to not need, while the stack actually
+shipped goes undeclared. Declaring the provide makes the dependency resolve to what is really installed.
+
+In the reported failure apt 3.0 declined *both* candidates and the install failed outright rather than resolving wrongly:
+
+```text
+Unsatisfied dependencies:
+  golang-github-containers-common : Depends: container-network-stack
+  ...
+  - containernetworking-plugins:amd64=1.1.1+ds1-3+b17 is not selected for install
+  - netavark:amd64=1.14.0-2 is not selected for install because:
+      podman:amd64=6.0.2-2 Conflicts netavark
+```
+
+Note that apt gave a reason for rejecting `netavark` and **none** for rejecting `containernetworking-plugins`. Do not read a hard constraint
+into that silence — nothing in this package's control forbids it, and why it went unselected on that host was not established (apt policy on
+a multi-suite system is the likely cause). The provide is correct either way; the failure is what surfaced it, not what justifies it.
 
 On **Alpine** the same intent needs three mechanisms instead of two:
 

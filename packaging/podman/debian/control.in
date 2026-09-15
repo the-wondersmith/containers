@@ -52,15 +52,41 @@ Rules-Requires-Root: no
 # why it is hardcoded rather than templated from @NETAVARK_VERSION@.
 #
 # golang-github-containers-common, which this package depends on, depends on
-# container-network-stack. Without the line below, apt has exactly two
-# candidates for that dependency -- netavark and containernetworking-plugins --
-# and this package Conflicts with netavark, so installation fails outright:
+# container-network-stack -- UNVERSIONED, so a generation-1 provider formally
+# satisfies it. Without the line below there are exactly two candidates, and
+# NEITHER is a good outcome:
+#
+#   netavark                     Conflicts with this package, so never selected.
+#   containernetworking-plugins  NOT conflicted here, and a perfectly
+#                                installable trixie package (1.1.1+ds1-3).
+#                                Nothing stops apt from pulling it in.
+#
+# The second one is the trap, and it is why this Provides is about correctness
+# and not only about installability. containernetworking-plugins is CNI, the
+# generation-1 stack podman removed support for in 5.0 -- podman 6.0 cannot use
+# a single binary in it -- and it declares Depends: iptables, which this
+# package deliberately avoids, netavark 2.x having deleted all iptables support
+# (the reason nftables is a hard dependency above). Resolving that way installs
+# a dead network stack plus the firewall backend this package exists to not
+# need, while the stack actually shipped goes undeclared.
+#
+# In the reported failure apt 3.0 declined BOTH candidates and the install
+# failed outright rather than resolving wrongly:
 #
 #   Unsatisfied dependencies:
 #    golang-github-containers-common : Depends: container-network-stack
+#   ...
+#    - containernetworking-plugins:amd64=1.1.1+ds1-3+b17 is not selected for install
+#    - netavark:amd64=1.14.0-2 is not selected for install because:
+#        podman:amd64=6.0.2-2 Conflicts netavark
 #
-# The claim is honest: the bundled netavark @NETAVARK_VERSION@ at
-# /usr/libexec/podman IS a generation-2 container network stack.
+# apt gave a reason for rejecting netavark and NONE for rejecting
+# containernetworking-plugins. Do not read a hard constraint into that silence:
+# nothing in this control forbids it, and why it went unselected on that host
+# was not established. The claim below is honest independently of any of this
+# -- the bundled netavark @NETAVARK_VERSION@ at /usr/libexec/podman IS a
+# generation-2 container network stack -- and declaring it makes the dependency
+# resolve to the stack that is actually installed.
 
 Package: podman
 Architecture: @ARCH@
