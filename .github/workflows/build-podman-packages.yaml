@@ -173,6 +173,13 @@ jobs:
           version="$(jq -er --arg c "${COMPONENT}" '.[$c].version' <<< "${COMPONENTS}")"
           commit="$(jq -er --arg c "${COMPONENT}" '.[$c].commit' <<< "${COMPONENTS}")"
 
+          # The tag as upstream actually spells it. Falls back to "v<version>"
+          # only for a hand-written dispatch payload that predates the field --
+          # never reconstructed when upstream-watch has told us the real answer,
+          # because latest_tag accepts a bare "1.2.3" just as readily as "v1.2.3"
+          # and guessing wrong asks for a ref that does not exist.
+          tag="$(jq -r --arg c "${COMPONENT}" '.[$c].tag // ("v" + .[$c].version)' <<< "${COMPONENTS}")"
+
           # Read the upstream repository out of the definition rather than
           # assuming containers/<component>: catatonit lives under openSUSE, so
           # the assumption produced a wrong provenance annotation on its cached
@@ -203,6 +210,11 @@ jobs:
           # release onto the prerelease lane the way a head build does.
           prev_version="$(jq -r --arg c "${COMPONENT}" '.[$c].previous.version // ""' <<< "${COMPONENTS}")"
           prev_commit="$(jq -r --arg c "${COMPONENT}" '.[$c].previous.commit // ""' <<< "${COMPONENTS}")"
+          prev_tag="$(
+            jq -r --arg c "${COMPONENT}" \
+              '.[$c].previous | if . == null then "" else (.tag // ("v" + .version)) end' \
+              <<< "${COMPONENTS}"
+          )"
 
           # Two spellings of the same snapshot, because no single string is legal
           # in both ecosystems:
@@ -219,15 +231,22 @@ jobs:
           # though nothing here depends on that: these versions are only ever
           # used as exact identifiers (cache tags, `Provides: x (= y)`, `=` in
           # apk provides), never compared as ranges.
+          #
+          # The stamp runs to the SECOND. At day resolution two commits landing
+          # on one date produce the same version, and therefore the same
+          # component cache key, so a later run would restore the earlier
+          # commit's build while claiming the newer SHA.
           head_version=""
           head_deb_version=""
           if [[ -n "${head_commit}" ]]; then
             head_version="${version}_git${head_date}"
             head_deb_version="${version}+git${head_date}.${head_commit:0:7}"
+            echo "::notice::${COMPONENT} snapshot identity would be ${head_version}"
           fi
 
           {
             echo "version=${version}"
+            echo "tag=${tag}"
             echo "commit=${commit}"
             echo "repository=${repository}"
             echo "head-commit=${head_commit}"
@@ -236,6 +255,7 @@ jobs:
             echo "head-deb-version=${head_deb_version}"
             echo "prev-version=${prev_version}"
             echo "prev-commit=${prev_commit}"
+            echo "prev-tag=${prev_tag}"
           } >> "${GITHUB_OUTPUT}"
 
       # ── act only ────────────────────────────────────────────────────────────
@@ -298,7 +318,7 @@ jobs:
           version: ${{ steps.spec.outputs.version }}
           commit: ${{ steps.spec.outputs.commit }}
           ref-kind: tag
-          ref: v${{ steps.spec.outputs.version }}
+          ref: ${{ steps.spec.outputs.tag }}
           repository: ${{ steps.spec.outputs.repository }}
           token: ${{ github.token }}
 
@@ -333,7 +353,7 @@ jobs:
           version: ${{ steps.spec.outputs.prev-version }}
           commit: ${{ steps.spec.outputs.prev-commit }}
           ref-kind: tag
-          ref: v${{ steps.spec.outputs.prev-version }}
+          ref: ${{ steps.spec.outputs.prev-tag }}
           repository: ${{ steps.spec.outputs.repository }}
           token: ${{ github.token }}
 
@@ -352,6 +372,9 @@ jobs:
           HEAD_OUTCOME: ${{ steps.attempt-head.outcome }}
           HOLD_OUTCOME: ${{ steps.attempt-hold.outcome }}
           TAG_VERSION: ${{ steps.spec.outputs.version }}
+          TAG_REF: ${{ steps.spec.outputs.tag }}
+          HEAD_BRANCH: ${{ steps.spec.outputs.head-branch }}
+          PREV_TAG: ${{ steps.spec.outputs.prev-tag }}
           TAG_COMMIT: ${{ steps.spec.outputs.commit }}
           HEAD_VERSION: ${{ steps.spec.outputs.head-version }}
           HEAD_DEB_VERSION: ${{ steps.spec.outputs.head-deb-version }}
@@ -366,17 +389,20 @@ jobs:
             version="${TAG_VERSION}"
             deb_version="${TAG_VERSION}"
             commit="${TAG_COMMIT}"
+            ref="${TAG_REF}"
           elif [[ "${HEAD_OUTCOME}" == "success" ]]; then
             built_from="head"
             version="${HEAD_VERSION}"
             deb_version="${HEAD_DEB_VERSION}"
             commit="${HEAD_COMMIT}"
+            ref="${HEAD_BRANCH}"
             echo "::warning::${COMPONENT} ${TAG_VERSION} failed to build; using upstream head ${commit} as ${version}"
           elif [[ "${HOLD_OUTCOME}" == "success" ]]; then
             built_from="hold"
             version="${PREV_VERSION}"
             deb_version="${PREV_VERSION}"
             commit="${PREV_COMMIT}"
+            ref="${PREV_TAG}"
             echo "::warning::${COMPONENT} ${TAG_VERSION} and upstream head both failed; holding at ${version}"
           else
             echo "::error::${COMPONENT} (${ARCH}) could not be built from any candidate"
@@ -405,8 +431,10 @@ jobs:
             --arg version "${version}" \
             --arg deb_version "${deb_version}" \
             --arg commit "${commit}" \
+            --arg ref "${ref}" \
             '{component: $component, arch: $arch, source: $source,
-              version: $version, deb_version: $deb_version, commit: $commit}' \
+              version: $version, deb_version: $deb_version, commit: $commit,
+              tag: $ref}' \
             > "specs/${COMPONENT}-${ARCH}.json"
 
           cat "specs/${COMPONENT}-${ARCH}.json"
@@ -516,6 +544,7 @@ jobs:
                 | map({key: .[0].component,
                       value: {version: .[0].version,
                               deb_version: .[0].deb_version,
+                              tag: .[0].tag,
                               commit: .[0].commit,
                               source: .[0].source}})
                 | from_entries) as $built

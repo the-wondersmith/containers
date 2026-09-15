@@ -157,9 +157,17 @@ jobs:
           # since 2026-08-06, and the fix (containers/aardvark-dns#731) has sat
           # on main, untagged, since 2026-08-11.
           #
-          # Emits "<branch> <sha> <YYYYMMDD>". The date is the COMMIT's own date,
-          # not the wall clock, so re-resolving the same head twice produces the
-          # same snapshot version and the same component cache key.
+          # Emits "<branch> <sha> <YYYYMMDDHHMMSS>". The stamp is the COMMIT's own
+          # committer date, not the wall clock, so re-resolving the same head
+          # twice produces the same snapshot version and the same cache key.
+          #
+          # To the SECOND, not the day. A day-resolution stamp gives two commits
+          # landing on the same date the same snapshot version, and the component
+          # cache is keyed on version -- so the second run would restore the first
+          # commit's .apk while the manifest recorded the second commit's SHA.
+          # The cache entry's provenance is verified on top of this (see
+          # components/attempt), but the identity should not be ambiguous in the
+          # first place.
           #
           # The branch name is resolved rather than assumed: catatonit is not
           # under containers/ and need not share its conventions.
@@ -170,7 +178,7 @@ jobs:
               "${branch}" \
               "$(
                 gh api "repos/${repo}/commits/${branch}" \
-                  --jq '.sha + " " + (.commit.committer.date | sub("T.*"; "") | gsub("-"; ""))'
+                  --jq '.sha + " " + (.commit.committer.date | gsub("[-:TZ]"; ""))'
               )"
           }
 
@@ -277,11 +285,18 @@ jobs:
                 "${previous}"
             )"
 
+            # `tag` is carried verbatim alongside the bare version. latest_tag
+            # accepts "^v?", so a component whose upstream publishes "1.2.3"
+            # rather than "v1.2.3" resolves fine here -- but the build would then
+            # reconstruct "v1.2.3" and ask for a ref that does not exist, taking
+            # a pointless head fallback or failing outright. Record what was
+            # actually resolved rather than making the far end guess.
             components="$(
               jq -c \
-                --arg c "${component}" --arg v "${version}" --arg s "${commit}" \
+                --arg c "${component}" --arg v "${version}" --arg t "${tag}" \
+                --arg s "${commit}" \
                 --argjson h "${head}" --argjson p "${previous_spec}" \
-                '.[$c] = {version: $v, commit: $s, head: $h, previous: $p}' \
+                '.[$c] = {version: $v, tag: $t, commit: $s, head: $h, previous: $p}' \
                 <<< "${components}"
             )"
           done

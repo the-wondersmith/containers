@@ -65,8 +65,11 @@ inputs:
 
 outputs:
   cache-hit:
-    description: Whether this attempt was served from the component cache.
-    value: ${{ steps.restore.outputs.cache-hit }}
+    description: >-
+      Whether this attempt was actually served from the component cache -- a
+      restored entry whose recorded upstream commit did not match is reported
+      here as a miss, because it was discarded and rebuilt.
+    value: ${{ steps.verify.outputs.usable }}
   reference:
     description: The component cache reference for this attempt.
     value: ${{ steps.restore.outputs.reference }}
@@ -100,8 +103,56 @@ runs:
         namespace: ${{ inputs.namespace }}
         token: ${{ inputs.token }}
 
+    # A cache hit is only usable if it was built from the commit this attempt
+    # actually wants.
+    #
+    # The cache key is <version>-<target>-r<recipe-hash>, and the recipe hash
+    # deliberately excludes the commit -- so version is the ONLY thing tying an
+    # entry to a source revision. For a release tag that is close enough to
+    # sound: a tag is meant to be immutable. For a head snapshot it is not, and
+    # for a RETAGGED upstream it is not either. Two head commits whose versions
+    # collide would otherwise silently serve the older build while the manifest
+    # recorded the newer SHA, which is precisely the provenance lie the snapshot
+    # versioning exists to prevent.
+    #
+    # components/save already annotates every entry with its upstream commit, so
+    # the check costs one manifest fetch and no rebuild in the common case.
+    # A mismatch degrades to a rebuild rather than an error: the entry is stale
+    # rather than malicious, and the save step overwrites it at the same
+    # reference afterwards, so the cache self-heals.
+    - name: Verify the cached artifact's provenance
+      id: verify
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+        REFERENCE: ${{ steps.restore.outputs.reference }}
+        EXPECTED_COMMIT: ${{ inputs.commit }}
+      run: |
+        set -euo pipefail
+
+        if [[ "${CACHE_HIT}" != "true" ]]; then
+          echo "usable=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+
+        cached_commit="$(
+          mise x -- oras manifest fetch "${REFERENCE}" 2> /dev/null \
+            | mise x -- jq -r \
+                '.annotations["dev.wondersmith.component.upstream-commit"] // ""'
+        )"
+
+        if [[ "${cached_commit}" != "${EXPECTED_COMMIT}" ]]; then
+          echo "::warning::${REFERENCE} was built from '${cached_commit:-unknown}', wanted ${EXPECTED_COMMIT}; rebuilding"
+          rm -rf components
+          echo "usable=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+
+        echo "cache hit verified: ${REFERENCE} @ ${cached_commit}"
+        echo "usable=true" >> "${GITHUB_OUTPUT}"
+
     - name: Pin the definition to this attempt's version and ref
-      if: steps.restore.outputs.cache-hit != 'true'
+      if: steps.verify.outputs.usable != 'true'
       shell: bash
       env:
         SOURCE_DEFINITION: packaging/melange/${{ inputs.component }}.yaml
@@ -191,7 +242,7 @@ runs:
         echo "pinned ${DEFINITION}: ${VERSION} @ ${REF_KIND}=${REF} (${COMMIT})"
 
     - name: Build the component
-      if: steps.restore.outputs.cache-hit != 'true'
+      if: steps.verify.outputs.usable != 'true'
       shell: bash
       env:
         DEFINITION: .melange-build/${{ inputs.component }}.yaml
@@ -219,7 +270,7 @@ runs:
         cp packages/"${ARCH}"/*.apk components/
 
     - name: Publish the component to the cache
-      if: steps.restore.outputs.cache-hit != 'true'
+      if: steps.verify.outputs.usable != 'true'
       uses: ./.github/actions/components/save
       with:
         reference: ${{ steps.restore.outputs.reference }}

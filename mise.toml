@@ -295,8 +295,112 @@ depends = [
 ]
 run = "mise run build:bundle"
 
+[tasks."build:pin"]
+description = "Write pinned copies of the melange recipes into .melange-build/"
+# The committed recipes carry PLACEHOLDERS, not versions: `@VERSION@`, a
+# deadbeef commit, and a null epoch. That is deliberate -- a committed version
+# that is only ever overwritten is a claim nobody maintains and everybody
+# believes. See the comments in packaging/melange/*.yaml.
+#
+# CI pins those placeholders from the components JSON the upstream watcher
+# resolved. Local builds have no such JSON, so this task reconstructs one from
+# the most recent release's manifest.json: the versions that were last actually
+# shipped, which is the closest local equivalent to "what CI would build".
+#
+# Set MELANGE_PIN_FROM=upstream to resolve the newest upstream releases instead,
+# which is what the next scheduled run would pick up.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{{ config_root }}"
+
+components=(catatonit netavark aardvark-dns buildah podman)
+
+declare -A repos=(
+  [podman]=containers/podman
+  [netavark]=containers/netavark
+  [aardvark-dns]=containers/aardvark-dns
+  [buildah]=containers/buildah
+  [catatonit]=openSUSE/catatonit
+)
+
+source_mode="${MELANGE_PIN_FROM:-manifest}"
+
+if ! command -v gh > /dev/null; then
+  echo "gh is required to resolve versions for a local build" >&2
+  echo "install it, or pin .melange-build/*.yaml by hand" >&2
+  exit 1
+fi
+
+manifest="$(mktemp)"
+trap 'rm -f "${manifest}"' EXIT
+
+if [[ "${source_mode}" == "manifest" ]]; then
+  tag="$(.github/scripts/release-identity.sh previous podman)" || {
+    echo "no previous podman release to pin from; try MELANGE_PIN_FROM=upstream" >&2
+    exit 1
+  }
+  gh release download "${tag}" --pattern manifest.json --output "${manifest}" --clobber
+  echo "pinning from release ${tag}"
+fi
+
+mkdir -p .melange-build
+
+for component in "${components[@]}"; do
+  if [[ "${source_mode}" == "upstream" ]]; then
+    ctag="$(
+      gh api "repos/${repos[${component}]}/releases?per_page=100" --jq \
+        'map(select(.draft == false and .prerelease == false)
+              | .tag_name
+              | select(test("^v?[0-9]+[.][0-9]+[.][0-9]+$")))
+          | max_by(sub("^v"; "") | split(".") | map(tonumber)) // empty'
+    )"
+    version="${ctag#v}"
+    commit="$(gh api "repos/${repos[${component}]}/commits/${ctag}" --jq '.sha')"
+  else
+    version="$(jq -er --arg c "${component}" '.components[$c].version' "${manifest}")"
+    commit="$(jq -er --arg c "${component}" '.components[$c].commit' "${manifest}")"
+    ctag="$(jq -r --arg c "${component}" '.components[$c].tag // ("v" + .components[$c].version)' "${manifest}")"
+  fi
+
+  definition=".melange-build/${component}.yaml"
+  cp "packaging/melange/${component}.yaml" "${definition}"
+
+  yq -i ".package.version = \"${version}\"" "${definition}"
+  yq -i \
+    "(.pipeline[] | select(.uses == \"git-checkout\") | .with.expected-commit) = \"${commit}\"" \
+    "${definition}"
+  yq -i \
+    "(.pipeline[] | select(.uses == \"git-checkout\") | .with) |= (del(.branch) | .tag = \"${ctag}\")" \
+    "${definition}"
+
+  echo "  ${component}: ${version} @ ${ctag} (${commit:0:7})"
+done
+
+# The bundle takes podman's version, a real epoch, and the bundled components'
+# versions in its provides -- all placeholders in the committed file.
+bundle=".melange-build/podman-bundle.yaml"
+cp packaging/melange/podman-bundle.yaml "${bundle}"
+
+podman_version="$(yq -r '.package.version' .melange-build/podman.yaml)"
+yq -i ".package.version = \"${podman_version}\"" "${bundle}"
+yq -i ".package.epoch = 0" "${bundle}"
+
+for component in netavark aardvark-dns catatonit buildah; do
+  version="$(yq -r '.package.version' ".melange-build/${component}.yaml")"
+  yq -i \
+    "(.package.dependencies.provides[] | select(. == \"${component}=*\")) = \"${component}=${version}\"" \
+    "${bundle}"
+done
+
+echo "  podman-bundle: ${podman_version} (epoch 0, local)"
+echo "pinned recipes written to .melange-build/"
+'''
+
 [tasks."build:components"]
 description = "Build all static musl components via melange"
+depends = ["build:pin"]
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
@@ -313,7 +417,7 @@ mkdir -p .melange-logs
 
 for component in catatonit netavark aardvark-dns buildah podman; do
   echo "==> ${component} (${arch})"
-  melange build "packaging/melange/${component}.yaml" \
+  melange build ".melange-build/${component}.yaml" \
     --arch "${arch}" \
     --runner docker \
     --out-dir ./packages \
@@ -328,6 +432,7 @@ echo "components built into ./packages/${arch}"
 
 [tasks."build:bundle"]
 description = "Assemble the Alpine podman bundle from built components"
+depends = ["build:pin"]
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
@@ -353,7 +458,7 @@ cp packages/"${arch}"/*.apk .melange-src/components/
 cp -r packaging/podman/alpine .melange-src/alpine
 cp packaging/podman/50-bundled-helpers.conf .melange-src/alpine/
 
-melange build packaging/melange/podman-bundle.yaml \
+melange build .melange-build/podman-bundle.yaml \
   --arch "${arch}" \
   --runner docker \
   --source-dir ./.melange-src \
