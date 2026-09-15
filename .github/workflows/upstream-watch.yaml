@@ -3,10 +3,14 @@ name: Upstream Watch
 
 # The only thing that starts a release.
 #
-# Runs weekly, resolves the newest semver tag for every component, and diffs the
-# result against the manifest.json attached to the most recent release. That
-# manifest is the repository's entire persistent state -- there is no
-# versions.yaml, no bump commit, and no bump pull request.
+# Runs weekly, resolves the newest stable semver RELEASE for every component, and
+# diffs the result against the manifest.json attached to this repository's most
+# recent release. That manifest is the repository's entire persistent state --
+# there is no versions.yaml, no bump commit, and no bump pull request.
+#
+# Every upstream lookup goes through `gh api`. Nothing here shells out to git:
+# the only operation that ever needed it -- peeling an annotated tag to the
+# commit it points at -- has a one-call REST equivalent. See `tag_commit` below.
 #
 # Classification decides the lane, not a human:
 #   * any component crossing a MAJOR version  -> prerelease, no APT dispatch,
@@ -65,25 +69,109 @@ jobs:
         run: |
           set -euo pipefail
 
-          # component -> upstream repository. catatonit is the odd one out: it
-          # lives under openSUSE, not containers.
+          # component -> upstream repository, in the OWNER/NAME form `gh api`
+          # takes. catatonit is the odd one out: it lives under openSUSE, not
+          # containers.
           declare -A repos=(
-            [podman]=https://github.com/containers/podman.git
-            [netavark]=https://github.com/containers/netavark.git
-            [aardvark-dns]=https://github.com/containers/aardvark-dns.git
-            [buildah]=https://github.com/containers/buildah.git
-            [catatonit]=https://github.com/openSUSE/catatonit.git
+            [podman]=containers/podman
+            [netavark]=containers/netavark
+            [aardvark-dns]=containers/aardvark-dns
+            [buildah]=containers/buildah
+            [catatonit]=openSUSE/catatonit
           )
 
-          # Newest x.y.z tag, ignoring release candidates and anything else that
-          # is not a plain three-part version.
+          # Components eligible for the head fallback. podman is deliberately
+          # ABSENT: it is the bulk of the attack surface and the thing users
+          # actually run, so it builds from a release tag or it does not build.
+          # The four helpers are small, and a snapshot of one of them is a far
+          # narrower thing to ship than a snapshot of the engine.
+          #
+          # A component missing from this set gets no `head` entry in the
+          # components JSON, and the build treats that as "tag or nothing".
+          declare -A head_eligible=(
+            [netavark]=1
+            [aardvark-dns]=1
+            [buildah]=1
+            [catatonit]=1
+          )
+
+          # Newest stable x.y.z RELEASE. Note "release", not "tag": this reads
+          # /releases rather than the tag namespace, so an upstream tag that was
+          # pushed WITHOUT a corresponding GitHub release is invisible here. That
+          # is deliberate -- a bare tag is not a thing upstream has announced as
+          # shippable, and this workflow's output goes straight to a build with
+          # no human in the loop. All five components publish releases for every
+          # version worth building.
+          #
+          # Three filters, and each excludes something the previous tag-based
+          # scan could not:
+          #
+          #   .draft == false        a draft release is not public yet
+          #   .prerelease == false   an rc flagged in the API rather than in its
+          #                          NAME was previously indistinguishable from a
+          #                          stable one, because the tag text is all the
+          #                          old scan had to go on
+          #   test(...)              plain three-part version, so -rc1/-beta and
+          #                          date tags stay out
+          #
+          # max_by over a NUMERIC key, not `max`: lexically "v1.9.0" sorts above
+          # "v1.45.0", which is the bug `sort -V` existed to avoid.
+          #
+          # `// empty` because max_by returns null on an empty array, and a bare
+          # "null" reaching the caller would read as a resolved version. Empty
+          # trips the guard below instead.
           latest_tag() {
-            git ls-remote --tags --refs "${1}" \
-              | awk '{print $2}' \
-              | sed 's|refs/tags/||' \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -V \
-              | tail -n1
+            gh api "repos/${1}/releases?per_page=100" --jq '
+              map(
+                select(.draft == false and .prerelease == false)
+                | .tag_name
+                | select(test("^v?[0-9]+[.][0-9]+[.][0-9]+$"))
+              )
+              | max_by(sub("^v"; "") | split(".") | map(tonumber))
+              // empty
+            '
+          }
+
+          # Resolve a tag to the COMMIT it points at.
+          #
+          # This replaces `git ls-remote <repo> refs/tags/<tag>^{}` plus its
+          # fallback for lightweight tags. The two-step dance is not needed over
+          # REST: /commits/<ref> resolves a ref of any kind and always yields a
+          # commit, so an annotated tag is peeled server-side. Verified against
+          # `git ls-remote ... ^{}` for all five components -- identical SHAs,
+          # and for aardvark-dns v2.0.0 it agrees with the SHA recorded in the
+          # last release's manifest.json.
+          #
+          # Do NOT be tempted by .target_commitish on the release object: that is
+          # frequently a branch name ("main") rather than a SHA, and it records
+          # where the release was cut FROM, not what the tag resolves TO.
+          tag_commit() {
+            gh api "repos/${1}/commits/${2}" --jq '.sha'
+          }
+
+          # The default branch tip, for the head fallback in
+          # build-podman-packages.yaml: when a component will not build from its
+          # release tag, the build retries from here on the theory that upstream
+          # has already merged a fix but not yet tagged one. That is not
+          # hypothetical -- aardvark-dns v2.1.0 has not compiled against musl
+          # since 2026-08-06, and the fix (containers/aardvark-dns#731) has sat
+          # on main, untagged, since 2026-08-11.
+          #
+          # Emits "<branch> <sha> <YYYYMMDD>". The date is the COMMIT's own date,
+          # not the wall clock, so re-resolving the same head twice produces the
+          # same snapshot version and the same component cache key.
+          #
+          # The branch name is resolved rather than assumed: catatonit is not
+          # under containers/ and need not share its conventions.
+          head_spec() {
+            local repo="$1" branch
+            branch="$(gh api "repos/${repo}" --jq '.default_branch')"
+            printf '%s %s\n' \
+              "${branch}" \
+              "$(
+                gh api "repos/${repo}/commits/${branch}" \
+                  --jq '.sha + " " + (.commit.committer.date | sub("T.*"; "") | gsub("-"; ""))'
+              )"
           }
 
           previous="$(mktemp)"
@@ -129,17 +217,16 @@ jobs:
 
             tag="$(latest_tag "${repo}")"
             if [[ -z "${tag}" ]]; then
-              echo "::error::could not resolve a version tag for ${component} from ${repo}"
+              echo "::error::no stable semver release for ${component} in ${repo}"
               exit 1
             fi
             version="${tag#v}"
 
-            # Peel the annotated tag to the commit it points at, so the build is
-            # pinned to a SHA rather than a mutable ref.
-            commit="$(git ls-remote "${repo}" "refs/tags/${tag}^{}" | awk '{print $1}')"
-            if [[ -z "${commit}" ]]; then
-              commit="$(git ls-remote "${repo}" "refs/tags/${tag}" | awk '{print $1}')"
-            fi
+            # Pin the build to a SHA rather than a mutable ref. `gh api` exits
+            # non-zero on an HTTP error and this runs under `set -e`, so a 404
+            # here aborts the run; the emptiness check is for a 200 that somehow
+            # carried no sha.
+            commit="$(tag_commit "${repo}" "${tag}")"
             if [[ -z "${commit}" ]]; then
               echo "::error::could not resolve a commit for ${component} ${tag}"
               exit 1
@@ -163,9 +250,39 @@ jobs:
               fi
             fi
 
+            # The head candidate, for eligible components only. Resolved for
+            # EVERY run rather than only for known-broken components, because
+            # nothing here knows what will fail -- the build does, an hour later
+            # and two workflows down, at which point going back for a SHA is not
+            # possible. Two API calls per helper is a cheap thing to always pay.
+            head='null'
+            if [[ -n "${head_eligible[${component}]:-}" ]]; then
+              read -r head_branch head_commit head_date < <(head_spec "${repo}")
+              head="$(
+                jq -nc \
+                  --arg b "${head_branch}" --arg s "${head_commit}" --arg d "${head_date}" \
+                  '{branch: $b, commit: $s, date: $d}'
+              )"
+              echo "::notice::${component}: head candidate ${head_branch}@${head_commit:0:7} (${head_date})"
+            fi
+
+            # The last known good version, carried forward so the build can hold
+            # a component here when BOTH its tag and its head fail. Null on a
+            # bootstrap run, where there is nothing to hold at and a total
+            # failure is simply a failure.
+            previous_spec="$(
+              jq -c --arg c "${component}" \
+                '.components[$c] // null
+                  | if . == null then null else {version: .version, commit: .commit} end' \
+                "${previous}"
+            )"
+
             components="$(
-              jq -c --arg c "${component}" --arg v "${version}" --arg s "${commit}" \
-                '.[$c] = {version: $v, commit: $s}' <<< "${components}"
+              jq -c \
+                --arg c "${component}" --arg v "${version}" --arg s "${commit}" \
+                --argjson h "${head}" --argjson p "${previous_spec}" \
+                '.[$c] = {version: $v, commit: $s, head: $h, previous: $p}' \
+                <<< "${components}"
             )"
           done
 
@@ -205,6 +322,13 @@ jobs:
       # that failed. release.yaml already carries the same grant one level down
       # for the same reason; it simply was never propagated up to this caller.
       actions: read
+      # release.yaml's `announce-fallback` job files the tracking issue when a
+      # component could not be built from its release tag. Same propagation rule
+      # as `actions: read` above -- a called workflow cannot grant itself more
+      # than its caller holds, and the omission is rejected at workflow
+      # VALIDATION time, so the run dies before any job starts with an error
+      # naming a permission that appears nowhere in this file.
+      issues: write
     # Named explicitly, NOT `secrets: inherit`. A called workflow receives no
     # secrets by default, and inherit would forward every secret this repository
     # holds when release.yaml needs exactly one.

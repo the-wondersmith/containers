@@ -13,7 +13,24 @@
 # which takes precedence over everything in the makefile.
 package:
   name: buildah
-  version: 1.45.0
+  # PLACEHOLDER, deliberately not a real version.
+  #
+  # Set at build time by build-podman-packages.yaml, in the step "Pin the
+  # definition to the requested version and commit": it copies this file into
+  # .melange-build/ and rewrites .package.version from the components JSON that
+  # upstream-watch (or a manual release dispatch) resolved. The committed file is
+  # never the one that gets built.
+  #
+  # Nothing reads the value here. components/restore deletes .package.version
+  # outright before hashing the recipe for the component cache key, precisely
+  # because it is not part of the recipe.
+  #
+  # This used to carry the last-released version, which was worse than useless:
+  # it looked authoritative, was never consulted, and silently drifted from
+  # whatever was actually being built. If the token survives into a build,
+  # `tag: v${{package.version}}` below resolves to "v@VERSION@" and the checkout
+  # fails -- which is the entire point of it being a token.
+  version: "@VERSION@"
   epoch: 0
   description: Tool for building OCI container images (static musl build)
   url: https://buildah.io
@@ -48,7 +65,21 @@ pipeline:
     with:
       repository: https://github.com/containers/buildah
       tag: v${{package.version}}
-      expected-commit: 7ae7d5a4021b24d02a5c281badca8c4d8ebbf442
+      # PLACEHOLDER, deliberately not a real commit.
+      #
+      # Set from the components JSON by the same step that sets the version
+      # above, and likewise deleted by components/restore before the recipe is
+      # hashed.
+      #
+      # melange validates this field's SHAPE at compile time -- "contains invalid
+      # characters or invalid sha length" -- so the @TOKEN@ convention used for
+      # the version is not available here. Forty hex characters spelling
+      # "deadbeef" is the closest thing to an obviously-fake SHA that still
+      # parses, and `melange compile` in ci.yaml needs it to parse.
+      #
+      # If it survives into a build, git-checkout aborts with
+      # "Expected commit deadbeefdeadbeef... for <tag>, found <real sha>".
+      expected-commit: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 
   - name: Report the probed build tags
     runs: |

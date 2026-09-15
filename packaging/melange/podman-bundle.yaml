@@ -18,8 +18,21 @@
 # .melange-src by that same job and read via `melange build --source-dir`.
 package:
   name: podman
-  version: 6.0.2
-  epoch: 1
+  # PLACEHOLDER, deliberately not a real version. Set at build time by
+  # build-podman-packages.yaml from the components JSON (podman's own version),
+  # in the step that stages .melange-src for the bundle. Unlike the component
+  # definitions, this one is rewritten IN PLACE rather than on a copy, so a local
+  # `melange build` of this file dirties the working tree.
+  version: "@PODMAN_VERSION@"
+  # PLACEHOLDER. Set at build time to PKGREL, the package revision derived in
+  # release.yaml from the previous release's manifest.json.
+  #
+  # `null` rather than an @TOKEN@ because melange types this field as an integer
+  # and rejects a string outright ("unable to decode configuration file"). That
+  # makes it the one field here that cannot fail loudly on its own -- melange
+  # treats null as 0 -- so the assertion in build-podman-packages.yaml is what
+  # actually catches a missed substitution. Do not "tidy" this back to a literal.
+  epoch: null
   description: Self-contained Podman bundle (netavark, aardvark-dns, catatonit, buildah CLI)
   url: https://podman.io
   copyright:
@@ -47,11 +60,21 @@ package:
       - shadow-uidmap
     # Versioned, so another package's versioned dependency on any bundled
     # component is satisfied by installing this one.
+    #
+    # PLACEHOLDERS. Each version is rewritten at build time from the components
+    # JSON, by a loop in build-podman-packages.yaml that selects entries matching
+    # "<component>=*" and replaces them wholesale. The glob is what makes the
+    # token work: it matches "netavark=@NETAVARK_VERSION@" exactly as readily as
+    # it matched "netavark=2.0.0", so the substitution is unaffected.
+    #
+    # These claims MUST track the versions actually bundled -- a stale committed
+    # number here would have the .apk asserting it provides a netavark it does
+    # not ship, which is the same class of lie as the Debian Provides field.
     provides:
-      - aardvark-dns=2.0.0
-      - buildah=1.45.0
-      - catatonit=0.2.1
-      - netavark=2.0.0
+      - aardvark-dns=@AARDVARK_DNS_VERSION@
+      - buildah=@BUILDAH_VERSION@
+      - catatonit=@CATATONIT_VERSION@
+      - netavark=@NETAVARK_VERSION@
     replaces:
       - aardvark-dns
       - buildah

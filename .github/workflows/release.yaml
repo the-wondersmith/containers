@@ -230,7 +230,11 @@ jobs:
       actions: read
     uses: ./.github/workflows/test-podman-packages.yaml
     with:
-      components: ${{ inputs.components }}
+      # The EFFECTIVE set. A component that fell back to upstream head carries a
+      # snapshot version, and the acceptance suite locates artifacts by version;
+      # handing it the requested set would have it look for a .apk that the build
+      # deliberately did not produce.
+      components: ${{ needs.build.outputs.components }}
 
   publish:
     name: Publish ${{ needs.identity.outputs.tag }}
@@ -342,7 +346,12 @@ jobs:
       - name: Write the release manifest
         shell: bash
         env:
-          COMPONENTS: ${{ inputs.components }}
+          # The EFFECTIVE set, emphatically not inputs.components. This manifest
+          # IS the repository's persistent state: upstream-watch diffs the next
+          # run against it and release.yaml derives pkgrel from it. Recording a
+          # version that was requested but never built would make the next run
+          # believe that version already shipped and skip rebuilding it.
+          COMPONENTS: ${{ needs.build.outputs.components }}
           PKGREL: ${{ needs.identity.outputs.pkgrel }}
           TAG: ${{ needs.identity.outputs.tag }}
           REASON: ${{ inputs.reason }}
@@ -352,8 +361,15 @@ jobs:
           # This file is the repository's only persistent state. The upstream
           # watcher diffs against it to decide whether anything needs building,
           # and the identity job reads pkgrel back out of it.
+          # `head` and `previous` are resolution scratch that upstream-watch
+          # attaches on the way in: a head candidate that may never have been
+          # built, and the version this run was measured against. Neither
+          # describes what shipped, and keeping `previous` would bury a
+          # previous-previous in the file that the NEXT run reads as state.
           jq -n \
-            --argjson components "${COMPONENTS}" \
+            --argjson components "$(
+              jq -c 'map_values(del(.head, .previous))' <<< "${COMPONENTS}"
+            )" \
             --arg tag "${TAG}" \
             --argjson pkgrel "${PKGREL}" \
             --arg reason "${REASON}" \
@@ -383,7 +399,13 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3
         with:
           tag_name: ${{ needs.identity.outputs.tag }}
-          prerelease: ${{ inputs.prerelease }}
+          # Either the caller asked for a prerelease (a major bump), or the
+          # build fell back to an untagged upstream snapshot for at least one
+          # component. A snapshot has by definition not been released by
+          # upstream, so it goes down the soak lane and reaches the APT
+          # repository only via promote-prerelease.yaml.
+          prerelease: >-
+            ${{ inputs.prerelease || needs.build.outputs.snapshot == 'true' }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           # Only podman claims "latest". A second product's release workflow
@@ -403,8 +425,86 @@ jobs:
       # Skipped for prereleases: a major bump reaches the APT repository only
       # after it has survived the soak window.
       - name: Notify the APT control plane
-        if: ${{ !inputs.prerelease }}
+        # Same condition as the prerelease flag above, negated. These two must
+        # agree: a release published as a prerelease that still dispatched to
+        # APT would defeat the soak entirely.
+        if: >-
+          ${{ !(inputs.prerelease || needs.build.outputs.snapshot == 'true') }}
         uses: ./.github/actions/apt-dispatch
         with:
           tag: ${{ needs.identity.outputs.tag }}
           token: ${{ secrets.APT_DISPATCH_TOKEN }}
+
+  # A fallback is worth a durable record for the same reason a major bump is: the
+  # warning in the run log scrolls away, an issue does not. This is the only
+  # signal that upstream is broken -- the release itself succeeds, by design.
+  announce-fallback:
+    name: Record the upstream fallback
+    runs-on: ubuntu-latest
+    needs:
+      - identity
+      - build
+      - publish
+    if: >-
+      needs.build.outputs.snapshot == 'true'
+      || needs.build.outputs.held == 'true'
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: File or update the tracking issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.identity.outputs.tag }}
+          SUMMARY: ${{ needs.build.outputs.fallback-summary }}
+          SNAPSHOT: ${{ needs.build.outputs.snapshot }}
+          HELD: ${{ needs.build.outputs.held }}
+        run: |
+          set -euo pipefail
+
+          title='Upstream component could not be built from its release tag'
+
+          # printf rather than a heredoc: a heredoc terminator has to sit at
+          # column 0, which would close the surrounding YAML block scalar.
+          body="$(
+            printf '%s\n' \
+              "Release \`${TAG}\` did not build every component from the" \
+              'version upstream-watch resolved.' \
+              ''
+            printf '%s\n' "${SUMMARY}"
+            if [[ "${SNAPSHOT}" == "true" ]]; then
+              printf '%s\n' \
+                '' \
+                'Because at least one component came from an untagged snapshot,' \
+                'this release was published as a PRERELEASE and was not' \
+                'dispatched to the APT control plane. It is promoted only after' \
+                'the soak window, if the acceptance suite still passes.' \
+                '' \
+                'The durable fix is upstream tagging a release that builds.' \
+                'When that happens this resolves itself: the next run picks up' \
+                'the new tag, the tag build succeeds, and no fallback occurs.'
+            fi
+            if [[ "${HELD}" == "true" ]]; then
+              printf '%s\n' \
+                '' \
+                'At least one component built from NEITHER its release tag nor' \
+                'upstream head, and was held at its last known good version.' \
+                'That component is therefore frozen until upstream is fixed --' \
+                'it will silently stay frozen, so this issue is the only notice.'
+            fi
+          )"
+
+          existing="$(
+            gh issue list --repo "${GITHUB_REPOSITORY}" \
+              --state open --search "${title} in:title" \
+              --json number --jq '.[0].number // ""'
+          )"
+
+          if [[ -n "${existing}" ]]; then
+            gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" --body "${body}" --label automated
+          fi

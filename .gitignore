@@ -38,6 +38,14 @@ dist/
 # The .apk files are already covered above; the podman-gnu tarball is not.
 components/
 
+# ...but NOT the composite actions that live under .github/actions/components/.
+# The rule above is unanchored, so it matches that directory too. restore/ and
+# save/ predate the rule and survive only because gitignore does not affect
+# already-tracked files; a NEW action added there is silently untracked, and
+# `git status` says nothing. That is exactly how it was found -- by noticing an
+# added action.yaml missing from `git status --short`.
+!.github/actions/components/
+
 # melange build outputs, local build logs, and the disposable local signing key
 packages/
 melange-cache/
