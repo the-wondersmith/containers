@@ -9,7 +9,8 @@ max_line_length = 130
 insert_final_newline = true
 trim_trailing_whitespace = true
 
-[*.md]
+[**/*.md]
+max_line_length = ignore
 trim_trailing_whitespace = false
 
 [Makefile]
@@ -37,11 +38,20 @@ indent_style = unset
 indent_size = unset
 indent_style = unset
 
+[**/docs/**/*]
+max_line_length = ignore
+
 [**/s6-rc.d/**/run]
-max_line_length = 250
+max_line_length = ignore
+
+[**/.github/**/pve-*.sh]
+max_line_length = ignore
+
+[**/packaging/proxmox/**/*]
+max_line_length = ignore
 
 [**/.github/workflows/*.yaml]
-max_line_length = 250
+max_line_length = ignore
 
 [containers/traefik/overlay/usr/local/libexec/resolve-env-secrets]
-max_line_length = 250
+max_line_length = ignore

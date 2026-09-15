@@ -102,10 +102,12 @@ jobs:
       shim-version: ${{ inputs.shim-version }}
       ifupdown2-ref: ${{ inputs.ifupdown2-ref }}
       ifupdown2-version: ${{ inputs.ifupdown2-version }}
+    # yamllint disable rule:comments-indentation
     # No `secrets:` block. build-proxmox-image.yaml authenticates to GHCR with
     # the automatic GITHUB_TOKEN, which every workflow_call receives without
     # being passed anything. `secrets: inherit` would hand it every repository
     # secret for no benefit -- see ci-security.md, "Secrets are named".
+    # yamllint enable rule:comments-indentation
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Create the GitHub release. Reuses the .deb artifacts uploaded by the nested
