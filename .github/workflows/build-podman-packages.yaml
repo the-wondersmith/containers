@@ -33,6 +33,29 @@ on:
           Package release number. Resets to 1 when podman's own version moves
           and increments otherwise, so a release driven only by a bundled
           component bump still yields a distinguishable package.
+    outputs:
+      components:
+        description: >-
+          The EFFECTIVE component set, i.e. what was actually built rather than
+          what was requested. Identical to the `components` input unless a
+          component fell back to upstream head or held at its last known good
+          version. Callers must record this one -- writing the requested set into
+          a release manifest would mean the next run diffs against versions that
+          were never shipped.
+        value: ${{ jobs.resolve-effective.outputs.components }}
+      snapshot:
+        description: >-
+          "true" when at least one component was built from an untagged upstream
+          snapshot. release.yaml turns this into a forced prerelease.
+        value: ${{ jobs.resolve-effective.outputs.snapshot }}
+      held:
+        description: >-
+          "true" when at least one component could be built from neither its tag
+          nor upstream head and was held at its last known good version.
+        value: ${{ jobs.resolve-effective.outputs.held }}
+      fallback-summary:
+        description: Human-readable per-component account of any fallback.
+        value: ${{ jobs.resolve-effective.outputs.summary }}
   workflow_dispatch:
     inputs:
       components:
@@ -150,6 +173,13 @@ jobs:
           version="$(jq -er --arg c "${COMPONENT}" '.[$c].version' <<< "${COMPONENTS}")"
           commit="$(jq -er --arg c "${COMPONENT}" '.[$c].commit' <<< "${COMPONENTS}")"
 
+          # The tag as upstream actually spells it. Falls back to "v<version>"
+          # only for a hand-written dispatch payload that predates the field --
+          # never reconstructed when upstream-watch has told us the real answer,
+          # because latest_tag accepts a bare "1.2.3" just as readily as "v1.2.3"
+          # and guessing wrong asks for a ref that does not exist.
+          tag="$(jq -r --arg c "${COMPONENT}" '.[$c].tag // ("v" + .[$c].version)' <<< "${COMPONENTS}")"
+
           # Read the upstream repository out of the definition rather than
           # assuming containers/<component>: catatonit lives under openSUSE, so
           # the assumption produced a wrong provenance annotation on its cached
@@ -165,53 +195,68 @@ jobs:
             exit 1
           fi
 
+          # The head candidate, present only for components upstream-watch marked
+          # eligible (the four helpers; never podman). Absent entirely on a
+          # manual dispatch carrying a hand-written components JSON, which is
+          # fine -- no head entry simply means "tag or nothing", the behaviour
+          # this workflow had before the fallback existed.
+          head_commit="$(jq -r --arg c "${COMPONENT}" '.[$c].head.commit // ""' <<< "${COMPONENTS}")"
+          head_branch="$(jq -r --arg c "${COMPONENT}" '.[$c].head.branch // ""' <<< "${COMPONENTS}")"
+          head_date="$(jq -r --arg c "${COMPONENT}" '.[$c].head.date // ""' <<< "${COMPONENTS}")"
+
+          # The last known good release, for the case where BOTH the tag and the
+          # head fail. Holding here is not a snapshot -- it is a version that was
+          # already built, tested and published -- so it does not force the
+          # release onto the prerelease lane the way a head build does.
+          prev_version="$(jq -r --arg c "${COMPONENT}" '.[$c].previous.version // ""' <<< "${COMPONENTS}")"
+          prev_commit="$(jq -r --arg c "${COMPONENT}" '.[$c].previous.commit // ""' <<< "${COMPONENTS}")"
+          prev_tag="$(
+            jq -r --arg c "${COMPONENT}" \
+              '.[$c].previous | if . == null then "" else (.tag // ("v" + .version)) end' \
+              <<< "${COMPONENTS}"
+          )"
+
+          # Two spellings of the same snapshot, because no single string is legal
+          # in both ecosystems:
+          #
+          #   apk     2.1.0_git20260914        `_git` is a recognised apk suffix.
+          #                                    `+` is not, so the Debian form is
+          #                                    not usable here.
+          #   Debian  2.1.0+git20260914.7a35305
+          #                                    `_` is not a legal character in a
+          #                                    Debian version at all, so the apk
+          #                                    form is not usable there.
+          #
+          # Both sort after the plain release version in their own ecosystem,
+          # though nothing here depends on that: these versions are only ever
+          # used as exact identifiers (cache tags, `Provides: x (= y)`, `=` in
+          # apk provides), never compared as ranges.
+          #
+          # The stamp runs to the SECOND. At day resolution two commits landing
+          # on one date produce the same version, and therefore the same
+          # component cache key, so a later run would restore the earlier
+          # commit's build while claiming the newer SHA.
+          head_version=""
+          head_deb_version=""
+          if [[ -n "${head_commit}" ]]; then
+            head_version="${version}_git${head_date}"
+            head_deb_version="${version}+git${head_date}.${head_commit:0:7}"
+            echo "::notice::${COMPONENT} snapshot identity would be ${head_version}"
+          fi
+
           {
             echo "version=${version}"
+            echo "tag=${tag}"
             echo "commit=${commit}"
             echo "repository=${repository}"
+            echo "head-commit=${head_commit}"
+            echo "head-branch=${head_branch}"
+            echo "head-version=${head_version}"
+            echo "head-deb-version=${head_deb_version}"
+            echo "prev-version=${prev_version}"
+            echo "prev-commit=${prev_commit}"
+            echo "prev-tag=${prev_tag}"
           } >> "${GITHUB_OUTPUT}"
-
-      - name: Look for an existing build
-        id: restore
-        uses: ./.github/actions/components/restore
-        with:
-          component: ${{ matrix.component }}
-          version: ${{ steps.spec.outputs.version }}
-          target: ${{ matrix.arch }}-linux-musl
-          recipe: packaging/melange/${{ matrix.component }}.yaml
-          dest: components
-          token: ${{ github.token }}
-
-      - name: Pin the definition to the requested version and commit
-        if: steps.restore.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          SOURCE_DEFINITION: packaging/melange/${{ matrix.component }}.yaml
-          DEFINITION: .melange-build/${{ matrix.component }}.yaml
-          VERSION: ${{ steps.spec.outputs.version }}
-          COMMIT: ${{ steps.spec.outputs.commit }}
-        run: |
-          set -euo pipefail
-
-          # The committed definition carries the version and commit it was last
-          # verified against. Rewriting them is what lets a scheduled bump build a
-          # new upstream release without a commit to this repository.
-          #
-          # Pinned into a COPY rather than in place. `yq -i` rewrites the file and
-          # strips blank lines, so editing the tracked definition dirties the
-          # working tree -- invisible in CI's throwaway checkout, but obvious when
-          # act runs with --bind against the real repository.
-          #
-          # NOTE: this happens *after* components/restore has hashed the source
-          # file, deliberately. The cache key must track the build recipe, not the
-          # version being built -- the version is already in the tag.
-          mkdir -p .melange-build
-          cp "${SOURCE_DEFINITION}" "${DEFINITION}"
-
-          yq -i ".package.version = \"${VERSION}\"" "${DEFINITION}"
-          yq -i \
-            "(.pipeline[] | select(.uses == \"git-checkout\") | .with.expected-commit) = \"${COMMIT}\"" \
-            "${DEFINITION}"
 
       # ── act only ────────────────────────────────────────────────────────────
       # melange's docker runner creates its workspace and then asks the DAEMON to
@@ -229,8 +274,12 @@ jobs:
       # verbatim. Unique per component+arch: act runs matrix legs concurrently in
       # one workspace, and a shared directory makes them race on the git checkout
       # inside the guest -- "Unable to create '/home/build/.git/shallow.lock'".
+      #
+      # No longer gated on a cache miss: it exports MELANGE_WORKSPACE to the JOB,
+      # and the attempts below each decide their own cache outcome, so there is no
+      # single restore step left to gate on.
       - name: Point melange at a host-visible workspace (act only)
-        if: ${{ (env.ACT || vars.act) && steps.restore.outputs.cache-hit != 'true' }}
+        if: ${{ env.ACT || vars.act }}
         shell: bash
         env:
           COMPONENT: ${{ matrix.component }}
@@ -245,45 +294,158 @@ jobs:
           echo "MELANGE_WORKSPACE=${workspace}" >> "${GITHUB_ENV}"
           echo "::notice::act detected; melange workspace pinned to ${workspace}"
 
-      - name: Build the component
-        if: steps.restore.outputs.cache-hit != 'true'
+      # ── The three attempts ──────────────────────────────────────────────────
+      #
+      # 1. the upstream release tag          -- the normal path, and the only
+      #                                         path podman ever takes
+      # 2. the upstream default branch head  -- helpers only; catches the case
+      #                                         where upstream has merged a fix
+      #                                         but not yet tagged a release
+      # 3. the last known good version       -- neither of the above built, so
+      #                                         hold rather than wedge the whole
+      #                                         release on one broken component
+      #
+      # `continue-on-error` on the first two is what makes this a fallback chain
+      # rather than three ways to fail. The final decide step is what turns
+      # "everything was allowed to fail" back into a hard error when it should be.
+      - name: Attempt 1 - build from the release tag
+        id: attempt-tag
+        continue-on-error: true
+        uses: ./.github/actions/components/attempt
+        with:
+          component: ${{ matrix.component }}
+          arch: ${{ matrix.arch }}
+          version: ${{ steps.spec.outputs.version }}
+          commit: ${{ steps.spec.outputs.commit }}
+          ref-kind: tag
+          ref: ${{ steps.spec.outputs.tag }}
+          repository: ${{ steps.spec.outputs.repository }}
+          token: ${{ github.token }}
+
+      - name: Attempt 2 - build from upstream head
+        id: attempt-head
+        if: >-
+          steps.attempt-tag.outcome == 'failure'
+          && steps.spec.outputs.head-commit != ''
+        continue-on-error: true
+        uses: ./.github/actions/components/attempt
+        with:
+          component: ${{ matrix.component }}
+          arch: ${{ matrix.arch }}
+          version: ${{ steps.spec.outputs.head-version }}
+          commit: ${{ steps.spec.outputs.head-commit }}
+          ref-kind: branch
+          ref: ${{ steps.spec.outputs.head-branch }}
+          repository: ${{ steps.spec.outputs.repository }}
+          token: ${{ github.token }}
+
+      - name: Attempt 3 - hold at the last known good version
+        id: attempt-hold
+        if: >-
+          steps.attempt-tag.outcome == 'failure'
+          && steps.attempt-head.outcome != 'success'
+          && steps.spec.outputs.prev-version != ''
+        continue-on-error: true
+        uses: ./.github/actions/components/attempt
+        with:
+          component: ${{ matrix.component }}
+          arch: ${{ matrix.arch }}
+          version: ${{ steps.spec.outputs.prev-version }}
+          commit: ${{ steps.spec.outputs.prev-commit }}
+          ref-kind: tag
+          ref: ${{ steps.spec.outputs.prev-tag }}
+          repository: ${{ steps.spec.outputs.repository }}
+          token: ${{ github.token }}
+
+      # Collapse the three outcomes into one effective spec, and fail here if
+      # none of them produced anything. Without this step every attempt is
+      # `continue-on-error`, so the job would go green having built nothing and
+      # the missing .apk would surface two jobs later as a packaging error that
+      # names neither the component nor the reason.
+      - name: Decide which attempt won
+        id: effective
         shell: bash
         env:
-          DEFINITION: .melange-build/${{ matrix.component }}.yaml
+          COMPONENT: ${{ matrix.component }}
           ARCH: ${{ matrix.arch }}
+          TAG_OUTCOME: ${{ steps.attempt-tag.outcome }}
+          HEAD_OUTCOME: ${{ steps.attempt-head.outcome }}
+          HOLD_OUTCOME: ${{ steps.attempt-hold.outcome }}
+          TAG_VERSION: ${{ steps.spec.outputs.version }}
+          TAG_REF: ${{ steps.spec.outputs.tag }}
+          HEAD_BRANCH: ${{ steps.spec.outputs.head-branch }}
+          PREV_TAG: ${{ steps.spec.outputs.prev-tag }}
+          TAG_COMMIT: ${{ steps.spec.outputs.commit }}
+          HEAD_VERSION: ${{ steps.spec.outputs.head-version }}
+          HEAD_DEB_VERSION: ${{ steps.spec.outputs.head-deb-version }}
+          HEAD_COMMIT: ${{ steps.spec.outputs.head-commit }}
+          PREV_VERSION: ${{ steps.spec.outputs.prev-version }}
+          PREV_COMMIT: ${{ steps.spec.outputs.prev-commit }}
         run: |
           set -euo pipefail
 
-          # Empty on a GitHub runner, where melange's default workspace is already
-          # reachable by the daemon; set only by the act-gated step above.
-          workspace_args=()
-          if [[ -n "${MELANGE_WORKSPACE:-}" ]]; then
-            workspace_args=(--workspace-dir "${MELANGE_WORKSPACE}")
+          if [[ "${TAG_OUTCOME}" == "success" ]]; then
+            built_from="tag"
+            version="${TAG_VERSION}"
+            deb_version="${TAG_VERSION}"
+            commit="${TAG_COMMIT}"
+            ref="${TAG_REF}"
+          elif [[ "${HEAD_OUTCOME}" == "success" ]]; then
+            built_from="head"
+            version="${HEAD_VERSION}"
+            deb_version="${HEAD_DEB_VERSION}"
+            commit="${HEAD_COMMIT}"
+            ref="${HEAD_BRANCH}"
+            echo "::warning::${COMPONENT} ${TAG_VERSION} failed to build; using upstream head ${commit} as ${version}"
+          elif [[ "${HOLD_OUTCOME}" == "success" ]]; then
+            built_from="hold"
+            version="${PREV_VERSION}"
+            deb_version="${PREV_VERSION}"
+            commit="${PREV_COMMIT}"
+            ref="${PREV_TAG}"
+            echo "::warning::${COMPONENT} ${TAG_VERSION} and upstream head both failed; holding at ${version}"
+          else
+            echo "::error::${COMPONENT} (${ARCH}) could not be built from any candidate"
+            echo "::error::  release tag ${TAG_VERSION}: ${TAG_OUTCOME}"
+            echo "::error::  upstream head: ${HEAD_OUTCOME:-not attempted}"
+            echo "::error::  last known good ${PREV_VERSION:-none}: ${HOLD_OUTCOME:-not attempted}"
+            exit 1
           fi
 
-          mise x -- melange build "${DEFINITION}" \
-            --arch "${ARCH}" \
-            --runner docker \
-            --out-dir ./packages \
-            --source-dir ./.melange-src \
-            --generate-provenance \
-            --namespace "${GITHUB_REPOSITORY_OWNER}" \
-            "${workspace_args[@]}"
+          # One .apk, no more and no less. The attempt action clears its output
+          # directory before each try, so more than one here means two attempts
+          # both produced output, which would make the bundle non-deterministic.
+          shopt -s nullglob
+          built=(components/*.apk)
+          if [[ "${#built[@]}" -ne 1 ]]; then
+            echo "::error::expected exactly one .apk in components/, found ${#built[@]}"
+            printf '%s\n' "${built[@]}" >&2
+            exit 1
+          fi
 
-          mkdir -p components
-          cp packages/"${ARCH}"/*.apk components/
+          mkdir -p specs
+          jq -nc \
+            --arg component "${COMPONENT}" \
+            --arg arch "${ARCH}" \
+            --arg source "${built_from}" \
+            --arg version "${version}" \
+            --arg deb_version "${deb_version}" \
+            --arg commit "${commit}" \
+            --arg ref "${ref}" \
+            '{component: $component, arch: $arch, source: $source,
+              version: $version, deb_version: $deb_version, commit: $commit,
+              tag: $ref}' \
+            > "specs/${COMPONENT}-${ARCH}.json"
 
-      - name: Publish the component to the cache
-        if: steps.restore.outputs.cache-hit != 'true'
-        uses: ./.github/actions/components/save
+          cat "specs/${COMPONENT}-${ARCH}.json"
+
+      - name: Upload the effective spec
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
-          reference: ${{ steps.restore.outputs.reference }}
-          artifact: components/${{ matrix.component }}-${{ steps.spec.outputs.version }}-r0.apk
-          upstream-repo: ${{ steps.spec.outputs.repository }}
-          upstream-tag: v${{ steps.spec.outputs.version }}
-          upstream-commit: ${{ steps.spec.outputs.commit }}
-          token: ${{ github.token }}
-
+          name: spec-${{ matrix.component }}-${{ matrix.arch }}
+          path: specs/*.json
+          if-no-files-found: error
+          retention-days: 1
       - name: Upload the component for the packaging jobs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
@@ -296,6 +458,139 @@ jobs:
   # The one dynamically linked component: podman against glibc, with the
   # systemd build tag, for the Debian package only.
   # ───────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
+  # Reconcile what the component matrix actually built.
+  #
+  # Each (component, arch) leg decided independently whether it had to fall back,
+  # and each published an effective spec. This job merges those ten specs into
+  # one component set and answers the two questions the release needs:
+  # did anything ship from an untagged snapshot, and did anything hold back.
+  #
+  # It exists as a separate job because matrix legs cannot contribute to a shared
+  # output -- concurrent writes to the same job output collide, last writer wins,
+  # silently. Artifacts are the only aggregation channel GitHub actually offers.
+  # ───────────────────────────────────────────────────────────────────────────
+  resolve-effective:
+    name: Reconcile built versions
+    needs: components
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    outputs:
+      components: ${{ steps.merge.outputs.components }}
+      snapshot: ${{ steps.merge.outputs.snapshot }}
+      held: ${{ steps.merge.outputs.held }}
+      summary: ${{ steps.merge.outputs.summary }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Collect the effective specs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          pattern: spec-*
+          path: specs
+          merge-multiple: true
+
+      - name: Merge into one effective component set
+        id: merge
+        shell: bash
+        env:
+          REQUESTED: ${{ inputs.components }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          files=(specs/*.json)
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "::error::no effective specs were uploaded by the component matrix"
+            exit 1
+          fi
+
+          # Both architectures must agree on what they built. They decide
+          # independently, so a component that fails to compile on one arch and
+          # not the other would otherwise produce a bundle whose x86_64 and
+          # aarch64 halves ship different upstream code under one version.
+          #
+          # That is rare enough to be worth a human rather than a policy: almost
+          # every build break is a source-level one and hits both arches
+          # identically, which is exactly what aardvark-dns v2.1.0 does.
+          disagreements="$(
+            jq -s -r '
+              group_by(.component)[]
+              | select((map({source, version, commit}) | unique | length) > 1)
+              | .[0].component
+            ' "${files[@]}"
+          )"
+          if [[ -n "${disagreements}" ]]; then
+            echo "::error::architectures disagree on what was built:"
+            printf '%s\n' "${disagreements}" >&2
+            jq -s -r '.[] | "  \(.component) \(.arch): \(.source) \(.version) \(.commit)"' \
+              "${files[@]}" >&2
+            echo "::error::refusing to assemble a package from mismatched component builds" >&2
+            exit 1
+          fi
+
+          # Fold the per-arch specs down to one entry per component, then graft
+          # the result onto the REQUESTED set so that fields the build does not
+          # own -- head, previous -- survive into the manifest for the next run.
+          effective="$(
+            jq -s -c --argjson requested "${REQUESTED}" '
+              (group_by(.component)
+                | map({key: .[0].component,
+                      value: {version: .[0].version,
+                              deb_version: .[0].deb_version,
+                              tag: .[0].tag,
+                              commit: .[0].commit,
+                              source: .[0].source}})
+                | from_entries) as $built
+              | $requested
+              | to_entries
+              | map(.value += ($built[.key] // {}))
+              | from_entries
+            ' "${files[@]}"
+          )"
+
+          snapshot=false
+          held=false
+          summary=""
+
+          while read -r component source version commit; do
+            case "${source}" in
+              head)
+                snapshot=true
+                summary+="- ${component}: tag build failed, built from upstream head ${commit:0:7} as ${version}"$'\n'
+                echo "::warning::${component} built from an untagged snapshot (${version})"
+                ;;
+              hold)
+                held=true
+                summary+="- ${component}: tag and head both failed, held at ${version}"$'\n'
+                echo "::warning::${component} held at last known good ${version}"
+                ;;
+            esac
+          done < <(
+            jq -r 'to_entries[]
+                    | select(.value.source != null and .value.source != "tag")
+                    | "\(.key) \(.value.source) \(.value.version) \(.value.commit)"' \
+              <<< "${effective}"
+          )
+
+          {
+            echo "components=${effective}"
+            echo "snapshot=${snapshot}"
+            echo "held=${held}"
+            echo "summary<<SUMMARY_EOF"
+            printf '%s' "${summary}"
+            echo
+            echo "SUMMARY_EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+          jq . <<< "${effective}"
+
   podman-gnu:
     needs: authorize
     permissions:
@@ -425,7 +720,9 @@ jobs:
       contents: read
     name: .apk / ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    needs: components
+    needs:
+      - components
+      - resolve-effective
 
     strategy:
       fail-fast: false
@@ -458,7 +755,11 @@ jobs:
       - name: Stage the bundle inputs
         shell: bash
         env:
-          COMPONENTS: ${{ inputs.components }}
+          # The EFFECTIVE set. The bundle's versioned `provides` must name the
+          # components actually inside it; using inputs.components here would
+          # have a fallback build claim to provide a netavark release it does
+          # not contain.
+          COMPONENTS: ${{ needs.resolve-effective.outputs.components }}
           PKGREL: ${{ inputs.pkgrel }}
         run: |
           set -euo pipefail
@@ -510,6 +811,45 @@ jobs:
             yq -i \
               "(.package.dependencies.provides[] | select(. == \"${component}=*\")) = \"${component}=${version}\"" \
               "${definition}"
+          done
+
+          # As with the component definitions, the committed bundle carries
+          # placeholders rather than real values, and the check reads VALUES back
+          # rather than grepping for placeholder text -- the comments in that file
+          # name the tokens in prose, and yq does not rewrite comments.
+          #
+          # epoch is the field that makes this check load-bearing rather than
+          # belt-and-braces. The others would surface on their own: apk will not
+          # parse a version of "@PODMAN_VERSION@". But melange types epoch as an
+          # integer, so its placeholder has to be `null`, and melange reads null
+          # as 0 without complaint. An unsubstituted epoch therefore ships a
+          # perfectly plausible package carrying the wrong revision, one that can
+          # never supersede a real release. Nothing downstream would catch it.
+          bundle_version="$(yq -r '.package.version' "${definition}")"
+          bundle_epoch="$(yq -r '.package.epoch' "${definition}")"
+          expected_version="$(jq -er '.podman.version' <<< "${COMPONENTS}")"
+
+          if [[ "${bundle_version}" != "${expected_version}" ]]; then
+            echo "::error::${definition}: version is '${bundle_version}', expected '${expected_version}'"
+            exit 1
+          fi
+          if [[ "${bundle_epoch}" != "${PKGREL}" ]]; then
+            echo "::error::${definition}: epoch is '${bundle_epoch}', expected '${PKGREL}'"
+            echo "::error::a null epoch means PKGREL never reached the bundle" >&2
+            exit 1
+          fi
+          # `yq --arg` is jq syntax; mikefarah's yq has no such flag and would
+          # silently treat the expression as a no-match. Read the list out once
+          # and compare in the shell -- grep -xF is an exact whole-line match, so
+          # "netavark=2.0.0" cannot be satisfied by "netavark=2.0.0-rc1".
+          bundle_provides="$(yq -r '.package.dependencies.provides[]' "${definition}")"
+          for component in netavark aardvark-dns catatonit buildah; do
+            version="$(jq -er --arg c "${component}" '.[$c].version' <<< "${COMPONENTS}")"
+            if ! grep -qxF "${component}=${version}" <<< "${bundle_provides}"; then
+              echo "::error::${definition}: provides is missing ${component}=${version}"
+              printf '%s\n' "${bundle_provides}" >&2
+              exit 1
+            fi
           done
 
           yq '.package' "${definition}"
@@ -579,6 +919,7 @@ jobs:
     needs:
       - components
       - podman-gnu
+      - resolve-effective
     container:
       image: debian:trixie
 
@@ -657,7 +998,9 @@ jobs:
         uses: ./.github/actions/package/podman/debian
         with:
           components-dir: components
-          components: ${{ inputs.components }}
+          # The EFFECTIVE set; see the bundle job. Debian's Provides carries the
+          # same claim the .apk's does and must be just as true.
+          components: ${{ needs.resolve-effective.outputs.components }}
           pkgrel: ${{ inputs.pkgrel }}
           arch: ${{ matrix.deb-arch }}
 

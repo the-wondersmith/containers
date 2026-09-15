@@ -1,0 +1,282 @@
+---
+# One build attempt for one component at one specific upstream ref.
+#
+# WHY THIS EXISTS
+# ---------------
+# The component job used to inline restore -> pin -> build -> save as a straight
+# line of steps, which works exactly once. The head-fallback behaviour needs that
+# sequence run up to three times per component against different refs (release
+# tag, then upstream head, then the last known good version), so it had to become
+# something callable rather than something written down once.
+#
+# Each attempt is independently cached: the cache key is derived from the version
+# plus the recipe hash, so the tag build, the snapshot build and the hold-back
+# build occupy distinct entries and none of them clobbers another. That is what
+# makes the third attempt nearly free -- the previous release already built and
+# published exactly those bytes, so "hold at last known good" is normally a cache
+# hit rather than a rebuild.
+#
+# The caller is expected to set `continue-on-error: true` on every attempt except
+# the last, and to branch on `steps.<id>.outcome`.
+name: component-build-attempt
+description: >-
+  Restore or build a single component at a specific (version, ref) pair and leave
+  the resulting .apk in components/. Safe to invoke repeatedly within one job.
+
+inputs:
+  component:
+    required: true
+    description: Component name, matching packaging/melange/<component>.yaml.
+  arch:
+    required: true
+    description: Target architecture (x86_64 or aarch64).
+  version:
+    required: true
+    description: >-
+      The version this attempt builds AS. For a release-tag attempt this is the
+      upstream version; for a head attempt it is the snapshot version, which must
+      differ so the two never share a cache entry or claim each other's identity.
+  commit:
+    required: true
+    description: Full 40-character upstream commit SHA to pin the checkout to.
+  ref-kind:
+    required: true
+    description: >-
+      Either "tag" or "branch". melange's git-checkout rejects a definition that
+      sets both, so the pin step sets one and deletes the other rather than
+      leaving whichever the committed definition happened to carry.
+  ref:
+    required: true
+    description: The tag name (e.g. v2.1.0) or branch name (e.g. main).
+  repository:
+    required: true
+    description: Upstream repository URL, read from the committed definition.
+  registry:
+    required: false
+    default: ghcr.io
+    description: Component cache registry.
+  namespace:
+    required: false
+    default: ""
+    description: Component cache namespace; defaults inside components/restore.
+  token:
+    required: true
+    description: Token for the component cache.
+
+outputs:
+  cache-hit:
+    description: >-
+      Whether this attempt was actually served from the component cache -- a
+      restored entry whose recorded upstream commit did not match is reported
+      here as a miss, because it was discarded and rebuilt.
+    value: ${{ steps.verify.outputs.usable }}
+  reference:
+    description: The component cache reference for this attempt.
+    value: ${{ steps.restore.outputs.reference }}
+
+runs:
+  using: composite
+  steps:
+    # Every attempt starts from nothing. This matters because attempts are
+    # sequential within one job: if the tag attempt gets far enough to leave a
+    # half-written tree under packages/ before failing, the head attempt's
+    # `cp packages/<arch>/*.apk components/` would sweep that corpse up alongside
+    # its own output and hand the packaging jobs two .apk files for one
+    # component. Nothing downstream would notice until the bundle contained a
+    # netavark nobody asked for.
+    - name: Clear any previous attempt's output
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf components packages .melange-build
+
+    - name: Look for an existing build
+      id: restore
+      uses: ./.github/actions/components/restore
+      with:
+        component: ${{ inputs.component }}
+        version: ${{ inputs.version }}
+        target: ${{ inputs.arch }}-linux-musl
+        recipe: packaging/melange/${{ inputs.component }}.yaml
+        dest: components
+        registry: ${{ inputs.registry }}
+        namespace: ${{ inputs.namespace }}
+        token: ${{ inputs.token }}
+
+    # A cache hit is only usable if it was built from the commit this attempt
+    # actually wants.
+    #
+    # The cache key is <version>-<target>-r<recipe-hash>, and the recipe hash
+    # deliberately excludes the commit -- so version is the ONLY thing tying an
+    # entry to a source revision. For a release tag that is close enough to
+    # sound: a tag is meant to be immutable. For a head snapshot it is not, and
+    # for a RETAGGED upstream it is not either. Two head commits whose versions
+    # collide would otherwise silently serve the older build while the manifest
+    # recorded the newer SHA, which is precisely the provenance lie the snapshot
+    # versioning exists to prevent.
+    #
+    # components/save already annotates every entry with its upstream commit, so
+    # the check costs one manifest fetch and no rebuild in the common case.
+    # A mismatch degrades to a rebuild rather than an error: the entry is stale
+    # rather than malicious, and the save step overwrites it at the same
+    # reference afterwards, so the cache self-heals.
+    - name: Verify the cached artifact's provenance
+      id: verify
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+        REFERENCE: ${{ steps.restore.outputs.reference }}
+        EXPECTED_COMMIT: ${{ inputs.commit }}
+      run: |
+        set -euo pipefail
+
+        if [[ "${CACHE_HIT}" != "true" ]]; then
+          echo "usable=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+
+        cached_commit="$(
+          mise x -- oras manifest fetch "${REFERENCE}" 2> /dev/null \
+            | mise x -- jq -r \
+                '.annotations["dev.wondersmith.component.upstream-commit"] // ""'
+        )"
+
+        if [[ "${cached_commit}" != "${EXPECTED_COMMIT}" ]]; then
+          echo "::warning::${REFERENCE} was built from '${cached_commit:-unknown}', wanted ${EXPECTED_COMMIT}; rebuilding"
+          rm -rf components
+          echo "usable=false" >> "${GITHUB_OUTPUT}"
+          exit 0
+        fi
+
+        echo "cache hit verified: ${REFERENCE} @ ${cached_commit}"
+        echo "usable=true" >> "${GITHUB_OUTPUT}"
+
+    - name: Pin the definition to this attempt's version and ref
+      if: steps.verify.outputs.usable != 'true'
+      shell: bash
+      env:
+        SOURCE_DEFINITION: packaging/melange/${{ inputs.component }}.yaml
+        DEFINITION: .melange-build/${{ inputs.component }}.yaml
+        VERSION: ${{ inputs.version }}
+        COMMIT: ${{ inputs.commit }}
+        REF_KIND: ${{ inputs.ref-kind }}
+        REF: ${{ inputs.ref }}
+      run: |
+        set -euo pipefail
+
+        # Pinned into a COPY rather than in place. `yq -i` rewrites the file and
+        # strips blank lines, so editing the tracked definition dirties the
+        # working tree -- invisible in CI's throwaway checkout, but obvious when
+        # act runs with --bind against the real repository. Copying afresh each
+        # attempt also guarantees attempt N+1 starts from the committed
+        # placeholders rather than from attempt N's pins.
+        #
+        # NOTE: this happens *after* components/restore has hashed the source
+        # file, deliberately. The cache key must track the build recipe, not the
+        # version being built -- the version is already in the tag.
+        mkdir -p .melange-build
+        cp "${SOURCE_DEFINITION}" "${DEFINITION}"
+
+        yq -i ".package.version = \"${VERSION}\"" "${DEFINITION}"
+        yq -i \
+          "(.pipeline[] | select(.uses == \"git-checkout\") | .with.expected-commit) = \"${COMMIT}\"" \
+          "${DEFINITION}"
+
+        # git-checkout fails outright if both `tag` and `branch` are set
+        # ("both branch (x) and tag (y) are specified"), so whichever one this
+        # attempt does not want is deleted rather than left behind. The committed
+        # definitions all carry `tag`, so the tag path is a no-op rewrite and the
+        # branch path is the one that actually changes shape.
+        case "${REF_KIND}" in
+          tag)
+            yq -i \
+              "(.pipeline[] | select(.uses == \"git-checkout\") | .with) |= (del(.branch) | .tag = \"${REF}\")" \
+              "${DEFINITION}"
+            ;;
+          branch)
+            # A branch checkout with an expected-commit makes git-checkout take
+            # depth=-1 (full clone) and hard-reset to the pinned SHA when the
+            # branch has advanced past it. That is what keeps a head build
+            # reproducible despite `main` being a moving target between the
+            # resolve step and this one.
+            yq -i \
+              "(.pipeline[] | select(.uses == \"git-checkout\") | .with) |= (del(.tag) | .branch = \"${REF}\")" \
+              "${DEFINITION}"
+            ;;
+          *)
+            echo "::error::ref-kind must be 'tag' or 'branch', got '${REF_KIND}'"
+            exit 1
+            ;;
+        esac
+
+        # Read the VALUES back rather than grepping the file for placeholder
+        # patterns: these definitions carry comments that name the placeholders
+        # in prose, and a yq field assignment does not touch comment text.
+        # Asserting equality with the requested values also catches a yq
+        # expression that silently matched nothing.
+        pinned_version="$(yq -r '.package.version' "${DEFINITION}")"
+        pinned_commit="$(
+          yq -r \
+            '[.pipeline[] | select(.uses == "git-checkout") | .with.expected-commit][0] // ""' \
+            "${DEFINITION}"
+        )"
+        pinned_ref="$(
+          yq -r \
+            "[.pipeline[] | select(.uses == \"git-checkout\") | .with.${REF_KIND}][0] // \"\"" \
+            "${DEFINITION}"
+        )"
+
+        if [[ "${pinned_version}" != "${VERSION}" ]]; then
+          echo "::error::${DEFINITION}: version is '${pinned_version}', expected '${VERSION}'"
+          exit 1
+        fi
+        if [[ "${pinned_commit}" != "${COMMIT}" ]]; then
+          echo "::error::${DEFINITION}: expected-commit is '${pinned_commit}', expected '${COMMIT}'"
+          exit 1
+        fi
+        if [[ "${pinned_ref}" != "${REF}" ]]; then
+          echo "::error::${DEFINITION}: ${REF_KIND} is '${pinned_ref}', expected '${REF}'"
+          exit 1
+        fi
+
+        echo "pinned ${DEFINITION}: ${VERSION} @ ${REF_KIND}=${REF} (${COMMIT})"
+
+    - name: Build the component
+      if: steps.verify.outputs.usable != 'true'
+      shell: bash
+      env:
+        DEFINITION: .melange-build/${{ inputs.component }}.yaml
+        ARCH: ${{ inputs.arch }}
+      run: |
+        set -euo pipefail
+
+        # Empty on a GitHub runner, where melange's default workspace is already
+        # reachable by the daemon; set only by the act-gated step in the caller.
+        workspace_args=()
+        if [[ -n "${MELANGE_WORKSPACE:-}" ]]; then
+          workspace_args=(--workspace-dir "${MELANGE_WORKSPACE}")
+        fi
+
+        mise x -- melange build "${DEFINITION}" \
+          --arch "${ARCH}" \
+          --runner docker \
+          --out-dir ./packages \
+          --source-dir ./.melange-src \
+          --generate-provenance \
+          --namespace "${GITHUB_REPOSITORY_OWNER}" \
+          "${workspace_args[@]}"
+
+        mkdir -p components
+        cp packages/"${ARCH}"/*.apk components/
+
+    - name: Publish the component to the cache
+      if: steps.verify.outputs.usable != 'true'
+      uses: ./.github/actions/components/save
+      with:
+        reference: ${{ steps.restore.outputs.reference }}
+        artifact: components/${{ inputs.component }}-${{ inputs.version }}-r0.apk
+        upstream-repo: ${{ inputs.repository }}
+        upstream-tag: ${{ inputs.ref }}
+        upstream-commit: ${{ inputs.commit }}
+        registry: ${{ inputs.registry }}
+        token: ${{ inputs.token }}

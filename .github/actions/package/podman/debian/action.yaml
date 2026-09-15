@@ -183,10 +183,10 @@ runs:
         sed \
           -e "s|@ARCH@|${ARCH}|g" \
           -e "s|@PODMAN_VERSION@|${VERSION}|g" \
-          -e "s|@NETAVARK_VERSION@|$(jq -er '."netavark".version' <<< "${COMPONENTS}")|g" \
-          -e "s|@AARDVARK_DNS_VERSION@|$(jq -er '."aardvark-dns".version' <<< "${COMPONENTS}")|g" \
-          -e "s|@CATATONIT_VERSION@|$(jq -er '."catatonit".version' <<< "${COMPONENTS}")|g" \
-          -e "s|@BUILDAH_VERSION@|$(jq -er '."buildah".version' <<< "${COMPONENTS}")|g" \
+          -e "s|@NETAVARK_VERSION@|$(jq -er '."netavark" | .deb_version // .version' <<< "${COMPONENTS}")|g" \
+          -e "s|@AARDVARK_DNS_VERSION@|$(jq -er '."aardvark-dns" | .deb_version // .version' <<< "${COMPONENTS}")|g" \
+          -e "s|@CATATONIT_VERSION@|$(jq -er '."catatonit" | .deb_version // .version' <<< "${COMPONENTS}")|g" \
+          -e "s|@BUILDAH_VERSION@|$(jq -er '."buildah" | .deb_version // .version' <<< "${COMPONENTS}")|g" \
           "${control_in}" > "${control}"
 
         rm -f "${control_in}"
@@ -231,6 +231,22 @@ runs:
 
         if [[ "${parsed_version}" != "${VERSION}-${PKGREL}" ]]; then
           echo "::error::changelog version is ${parsed_version}, expected ${VERSION}-${PKGREL}"
+          exit 1
+        fi
+
+        # The committed changelog's version line and trailer date are
+        # placeholders -- @PODMAN_VERSION@-@PKGREL@ @SUITE@ and @BUILD_DATE@ --
+        # because both are rewritten above unconditionally and a real-looking
+        # value there would only ever be a stale claim about a build that is not
+        # this one.
+        #
+        # The version-line check above already catches a failed `1s`, but it
+        # cannot see the trailer: dpkg-parsechangelog is lenient enough about a
+        # malformed date that a surviving @BUILD_DATE@ can reach the .deb. Check
+        # the whole file for tokens rather than trusting the parse.
+        if grep -q '@[A-Z_]*@' "${changelog}"; then
+          echo "::error::unsubstituted placeholders remain in debian/changelog"
+          grep -n '@[A-Z_]*@' "${changelog}" >&2
           exit 1
         fi
 
