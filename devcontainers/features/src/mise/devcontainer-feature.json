@@ -1,0 +1,37 @@
+{
+  "id": "mise",
+  "version": "1.0.0",
+  "name": "mise",
+  "documentationURL": "https://github.com/the-wondersmith/containers/tree/main/devcontainers/features/src/mise",
+  "description": "Installs `mise`. Auto-detects latest version and optionally pre-installs tools.",
+  "options": {
+    "mise-version": {
+      "type": "string",
+      "default": "latest",
+      "description": "Select `mise` version, if not latest.",
+      "proposals": [
+        "latest"
+      ]
+    },
+    "mise-install-musl": {
+      "type": "string",
+      "default": "detect",
+      "enum": [
+        "true",
+        "false",
+        "detect"
+      ],
+      "description": "Install `musl` variants of the `mise` binary."
+    },
+    "mise-auto-activate": {
+      "type": "boolean",
+      "default": true,
+      "description": "Add directives to shell rc files to enable automatic `mise` activation."
+    },
+    "mise-install-from-github": {
+      "type": "boolean",
+      "default": false,
+      "description": "Install binaries directly from GitHub releases."
+    }
+  }
+}

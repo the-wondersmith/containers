@@ -53,7 +53,7 @@ melange-cache/
 .melange-src/
 .melange-build/
 # Upstream sources checked out by the build actions (src/<component>).
-src/
+**/src/
 .melange-workspace/
 .deb-verify/
 # Cached APT indices and unpacked .debs used by the Proxmox package matrix.
@@ -62,6 +62,9 @@ src/
 .pve-matrix/
 melange.rsa
 melange.rsa.pub
+
+# Don't ignore `src` directories in `devcontainers/features/`
+!devcontainers/**/src/
 
 # Composite actions live under .github/actions/build/. A `**/build/**` rule in a
 # user's global core.excludesFile would otherwise make them invisible to git.

@@ -1,0 +1,61 @@
+{
+  "with_version": {
+    "image": "docker.io/library/alpine:latest",
+    "features": {
+      "mise": {
+        "mise-version": "2025.2.0"
+      }
+    }
+  },
+  "alpine_defaults": {
+    "image": "docker.io/library/alpine:latest",
+    "features": {
+      "mise": {}
+    }
+  },
+  "debian_defaults": {
+    "image": "docker.io/library/debian:bookworm-slim",
+    "features": {
+      "mise": {}
+    }
+  },
+  "musl_forced": {
+    "image": "docker.io/library/debian:bookworm-slim",
+    "features": {
+      "mise": {
+        "mise-install-musl": "true"
+      }
+    }
+  },
+  "auto_activate": {
+    "image": "docker.io/library/alpine:latest",
+    "features": {
+      "mise": {
+        "mise-auto-activate": true
+      },
+      "feature-testing": {
+        "command": "apk add --update --no-cache zsh fish"
+      }
+    }
+  },
+  "no_auto_activate": {
+    "image": "docker.io/library/alpine:latest",
+    "features": {
+      "mise": {
+        "mise-auto-activate": false
+      },
+      "feature-testing": {
+        "command": "apk add --update --no-cache zsh fish"
+      }
+    }
+  },
+  "install_from_github": {
+    "image": "docker.io/library/alpine:latest",
+    "features": {
+      "feature-testing": {},
+      "mise": {
+        "mise-install-from-github": true
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0",
+  "id": "wondersmith-feature-testing",
+  "name": "wondersmith-feature-testing",
+  "documentationURL": "https://github.com/the-wondersmith/containers/tree/main/devcontainers/features/src/feature-testing",
+  "description": "Testing helper for other devcontainer features",
+  "options": {
+    "command": {
+      "type": "string",
+      "default": "",
+      "description": "command to be executed (will be forwarded as is to a '<command-shell> -c <command>' line)"
+    },
+    "command-shell": {
+      "type": "string",
+      "default": "sh",
+      "description": "Shell <command> should be run in."
+    }
+  }
+}

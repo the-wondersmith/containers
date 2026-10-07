@@ -1,0 +1,170 @@
+---
+name: Dev Container Features
+
+# Self-contained on purpose. The Release orchestrator treats tags as an *output*
+# and models components that are built from upstream source; features are neither
+# -- they are a handful of shell scripts published straight to GHCR. Wiring them
+# into that workflow would mean teaching it a component shape it does not have.
+
+on:
+  pull_request:
+    paths:
+      - devcontainers/features/**
+      - .github/workflows/devcontainer-features.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - devcontainers/features/**
+      - .github/workflows/devcontainer-features.yaml
+  workflow_dispatch:
+    inputs:
+      publish:
+        required: false
+        type: boolean
+        default: false
+        description: Publish the features to GHCR after the suite passes.
+
+permissions:
+  contents: read
+
+env:
+  # Pinned rather than floating: the suite asserts on CLI behaviour that is not
+  # covered by the Features spec (install ordering, the shared builtin env file
+  # that `feature-testing` writes to). A silent major bump would surface as an
+  # inscrutable scenario failure.
+  DEVCONTAINER_CLI_VERSION: 0.89.0
+
+  # Features that must never be published. `feature-testing` lives under `src/`
+  # only because that is where the harness resolves scenario feature names from.
+  # Space-separated; see the guard in the publish job.
+  UNPUBLISHED_FEATURES: feature-testing
+
+jobs:
+  test:
+    name: Test features
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          # Nothing here pushes with git, and every scenario executes the pull
+          # request's own install.sh as root inside a container. Leaving the
+          # token in .git/config gives that code something to read.
+          persist-credentials: false
+
+      # The scenarios run PR-authored shell as root in a container on the
+      # runner. Repository settings already require approval for external
+      # contributors; this is the defence-in-depth layer behind it.
+      - name: Authorize the triggering actor
+        uses: ./.github/actions/authorize-actor
+
+      - name: Install the devcontainer CLI
+        shell: bash
+        run: npm install --global "@devcontainers/cli@${DEVCONTAINER_CLI_VERSION}"
+
+      - name: Run feature tests
+        shell: bash
+        working-directory: devcontainers/features
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          features=(test/*/)
+
+          if [[ "${#features[@]}" -eq 0 ]]; then
+            echo "::error::no feature tests found under devcontainers/features/test/"
+            exit 1
+          fi
+
+          # `--features` takes the whole list; a failure in any one scenario
+          # fails the run. Names come from the test/ directory rather than src/
+          # so that a feature without tests is a visible gap, not a silent pass.
+          names=()
+          for feature in "${features[@]}"; do
+            names+=("$(basename "${feature}")")
+          done
+
+          echo "::notice::testing ${names[*]}"
+          devcontainer features test --project-folder . --features "${names[@]}"
+
+  publish:
+    name: Publish features
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install the devcontainer CLI
+        shell: bash
+        run: npm install --global "@devcontainers/cli@${DEVCONTAINER_CLI_VERSION}"
+
+      - name: Publish each feature
+        shell: bash
+        working-directory: devcontainers/features
+        run: |
+          set -euo pipefail
+
+          read -ra excluded <<<"${UNPUBLISHED_FEATURES}"
+
+          # A rename would leave the exclusion matching nothing and quietly
+          # publish a feature that was meant to stay private, so treat a stale
+          # entry as a failure rather than a no-op.
+          for name in "${excluded[@]}"; do
+            if [[ ! -d "src/${name}" ]]; then
+              echo "::error::UNPUBLISHED_FEATURES names '${name}', which no longer exists under src/"
+              exit 1
+            fi
+          done
+
+          shopt -s nullglob
+          published=0
+
+          for path in src/*/; do
+            name="$(basename "${path}")"
+
+            skip=false
+            for excluded_name in "${excluded[@]}"; do
+              [[ "${name}" == "${excluded_name}" ]] && skip=true && break
+            done
+
+            if [[ "${skip}" == true ]]; then
+              echo "::notice::skipping ${name} (excluded from publish)"
+              continue
+            fi
+
+            # Published one at a time rather than as a collection: targeting the
+            # src/ folder would sweep in everything under it, exclusion list or
+            # not.
+            echo "::group::publishing ${name}"
+            devcontainer features publish "./${path%/}" \
+              --registry ghcr.io \
+              --namespace "${{ github.repository }}"
+            echo "::endgroup::"
+
+            published=$((published + 1))
+          done
+
+          if [[ "${published}" -eq 0 ]]; then
+            echo "::error::nothing was published -- every feature under src/ is excluded"
+            exit 1
+          fi
+
+          echo "::notice::published ${published} feature(s)"
