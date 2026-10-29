@@ -102,7 +102,14 @@ check_version() {
   _name="$1"
   _actual="$2"
   _package="$(printf '%s' "${COMPONENTS}" | jq -er --arg c "${_name}" '.[$c].version')"
-  _source="$(printf '%s' "${COMPONENTS}" | jq -er --arg c "${_name}" '.[$c].source')"
+  # Defaulted, because `source` is not part of the map a human writes. The
+  # dispatchable form of this suite documents version and commit only, and
+  # under `set -e` a bare `jq -er` on a missing key does not fail this check --
+  # it aborts the script mid-assignment, before rc is ever set, so the run dies
+  # with no FAIL line and every group below this one silently never executes.
+  # A hand-written map describes a tag build, which is the behaviour this had
+  # before the snapshot case existed.
+  _source="$(printf '%s' "${COMPONENTS}" | jq -er --arg c "${_name}" '.[$c].source // "tag"')"
   _expected="${_package}"
 
   # A head-fallback build cannot satisfy an exact match, and the mismatch is not

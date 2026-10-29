@@ -37,7 +37,11 @@ on:
       components:
         required: true
         type: string
-        description: JSON object mapping each component to its version and commit.
+        description: >-
+          JSON object mapping each component to its version and commit. An
+          optional "source" of tag, head or hold per component says how it was
+          built; omitting it means tag, so a hand-written map needs only the
+          two fields. release.yaml always supplies it.
       run-id:
         required: true
         type: string
