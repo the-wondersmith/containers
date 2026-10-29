@@ -18,3 +18,49 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  # The `alpine:X.Y` images the acceptance suite runs in.
+  #
+  # The `github-actions` ecosystem above does NOT cover these. Its parser reads
+  # `uses:` and nothing else -- `container:`/`services:` images are invisible to
+  # it -- so these tags sat unwatched while every action around them was
+  # tracked. The `docker` ecosystem finds any `image:` key at any depth in any
+  # workflow file, which is what reaches them inside `matrix.include[]`.
+  #
+  # The value here is INDIRECT and worth being explicit about, because the thing
+  # that actually breaks is not this file.
+  #
+  # Nothing dependabot supports can read a melange recipe. The pin that decides
+  # which Go the build gets is a plain URL --
+  #
+  #   - https://dl-cdn.alpinelinux.org/alpine/v3.24/community
+  #
+  # -- in packaging/melange/*.yaml, and there is no ecosystem that parses an
+  # Alpine CDN path. That gap is covered instead by
+  # .github/scripts/toolchain-floor.sh, which upstream-watch runs against the
+  # resolved upstream tag before a build starts.
+  #
+  # What dependabot CAN do is notice that a new stable Alpine branch exists at
+  # all, which is the fact the recipes need and cannot discover for themselves.
+  # A PR here is the prompt to move the recipes too; it is not the whole fix.
+  # It will not auto-merge -- dependabot-automerge only lands pinned-SHA `uses:`
+  # bumps and fails closed on anything else -- which is the correct outcome,
+  # since merging this alone would leave the suite testing a 3.N-built package
+  # on a 3.N+1 image.
+  - package-ecosystem: docker
+    directory: /.github/workflows
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+    groups:
+      workflow-images:
+        patterns:
+          - "*"
+    ignore:
+      # debian:trixie is a CODENAME, not a version. Codenames are not ordered,
+      # so dependabot cannot tell an upgrade from a sideways move, and the
+      # Proxmox images these feed are tied to a specific Debian release
+      # regardless -- moving off trixie is a deliberate decision, never a
+      # routine bump.
+      - dependency-name: debian

@@ -34,10 +34,10 @@ package:
 environment:
   contents:
     # Alpine, not Wolfi. melange defaults to the Wolfi ecosystem (which is
-    # glibc-based); every component here targets Alpine 3.23 / musl so a single
+    # glibc-based); every component here targets Alpine 3.24 / musl so a single
     # static build can serve both the .apk and the .deb.
     #
-    # 3.23 specifically, matching every other component. This file lagged on
+    # 3.24 specifically, matching every other component. This file lagged on
     # 3.21 for a while after the others moved, and nothing caught it because
     # catatonit is autotools-only -- it never needed the newer Go that forced
     # the move. Keep it on the same branch as the rest regardless: a different
@@ -49,8 +49,8 @@ environment:
       - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
       - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
     repositories:
-      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
-      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+      - https://dl-cdn.alpinelinux.org/alpine/v3.24/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.24/community
     packages:
       - autoconf
       - automake

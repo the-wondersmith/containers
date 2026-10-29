@@ -351,14 +351,21 @@ else
   # and being able to run a container as an unprivileged user. Host networking
   # exercises all of that and needs no pasta at all.
   #
-  # THE ENVIRONMENT owns pasta. Alpine 3.23 ships pasta 2025_09_19 and rootless
-  # pasta does not work inside this harness. That was verified by installing
-  # Alpine's OWN podman 5.7.0 into the same privileged container, where it fails
-  # the same way -- so nothing in this package is involved. Debian's older pasta
-  # (2025_05_03) works. Everything else measured is identical between the two:
+  # THE ENVIRONMENT owns pasta. On Alpine 3.23 (pasta 2025_09_19) rootless pasta
+  # did not work inside this harness. That was verified by installing Alpine's
+  # OWN podman 5.7.0 into the same privileged container, where it failed the same
+  # way -- so nothing in this package was involved. Debian's older pasta
+  # (2025_05_03) works. Everything else measured was identical between the two:
   # newuidmap privileges (capabilities on Alpine, setuid on Debian, both
   # effective), the full subuid range mapped, /dev/net/tun, the runtime directory
   # mode, and userns limits.
+  #
+  # Alpine 3.24 ships a much newer pasta (2026_05_26), which may well have fixed
+  # it. The branch below is kept because it is gated on the exact failure
+  # SIGNATURE rather than on a version string: if 3.24's pasta works the
+  # assertion simply passes and this never fires. Removing it on the assumption
+  # that the bump fixed things would turn a known environment failure back into
+  # a release blocker without anyone having checked.
   #
   # So a pasta failure matching that exact signature is recorded as a known
   # failure rather than blocking the release, and ANY other failure still fails.
@@ -382,7 +389,7 @@ else
       # Host networking cannot produce this signature, so this branch cannot mask
       # a failure of the part the package owns.
       echo "::warning::${_rna_label}: known Alpine pasta failure, not treated as a release blocker"
-      echo "KNOWN-FAIL: ${_rna_label} (Alpine 3.23 / pasta 2025_09_19 in-container)"
+      echo "KNOWN-FAIL: ${_rna_label} (Alpine rootless pasta in-container)"
       sed 's/^/  /' "${_rna_out}" | tail -6 >&2 || true
     else
       fail "${_rna_label}"

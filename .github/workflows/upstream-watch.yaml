@@ -45,6 +45,7 @@ jobs:
       major: ${{ steps.resolve.outputs.major }}
       components: ${{ steps.resolve.outputs.components }}
       summary: ${{ steps.resolve.outputs.summary }}
+      floor_unmet: ${{ steps.resolve.outputs.floor_unmet }}
 
     steps:
       - name: Checkout code
@@ -182,12 +183,37 @@ jobs:
               )"
           }
 
-          previous="$(mktemp)"
           # Without an explicit tag, gh release download resolves GitHub's
           # "latest" release. Once the first stable proxmox/* release exists
           # it becomes "latest", making every .components[$c].version // ""
           # read empty and marking every component as changed -- triggering a
           # full podman rebuild every week even when nothing upstream moved.
+          #
+          # NOT mktemp: it creates the file, and `gh release download --output`
+          # refuses to write a path that already exists --
+          #
+          #   <path> already exists (use `--clobber` to overwrite file ...)
+          #
+          # It exits 1, which the previous `2> /dev/null` hid along with the
+          # message, so this looked exactly like "no previous release exists".
+          # The download therefore NEVER succeeded. Three things followed, and
+          # all three were silent:
+          #
+          #   * `changed` was always true, so every weekly run rebuilt all five
+          #     components on both arches -- precisely the waste the tag
+          #     resolution above exists to prevent;
+          #   * `previous_spec` was always null, so the build's third attempt
+          #     ("hold at the last known good version") could never fire and was
+          #     dead code -- which is why podman and buildah went red for weeks
+          #     rather than holding at the previous release;
+          #   * `major` could never be true, so the prerelease/soak lane never
+          #     engaged and a major bump would have gone straight to a full
+          #     release.
+          #
+          # release.yaml hit the identical bug and was fixed in place; the fix
+          # was never back-ported here. stderr is no longer discarded, so a
+          # future failure says why instead of silently bootstrapping.
+          previous="${RUNNER_TEMP}/previous-manifest.json"
           previous_podman_tag=""
           ri_rc=0
           previous_podman_tag="$(
@@ -197,7 +223,16 @@ jobs:
           if [[ "${ri_rc}" -eq 0 ]]; then
             if gh release download "${previous_podman_tag}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --pattern manifest.json --output "${previous}" 2> /dev/null; then
+              --pattern manifest.json --output "${previous}" --clobber; then
+              # Validate rather than trust. A zero-byte or malformed manifest
+              # would otherwise read as version "" for every component, which is
+              # indistinguishable from a fresh repository -- the same silent
+              # bootstrap this block was just fixed to stop taking.
+              if ! jq -e '.components.podman.version' "${previous}" > /dev/null; then
+                echo "::error::${previous_podman_tag} has no usable manifest.json"
+                echo "::error::refusing to bootstrap: that would rebuild everything and disable the hold fallback"
+                exit 1
+              fi
               echo "::notice::comparing against $(jq -r '.tag' "${previous}")"
             else
               echo "::notice::no previous release; bootstrapping from upstream latest"
@@ -219,6 +254,7 @@ jobs:
           changed=false
           major=false
           summary=''
+          floor_unmet=''
 
           for component in podman netavark aardvark-dns buildah catatonit; do
             repo="${repos[${component}]}"
@@ -239,6 +275,54 @@ jobs:
               echo "::error::could not resolve a commit for ${component} ${tag}"
               exit 1
             fi
+
+            # Does the Alpine branch the recipe pins still ship a new enough
+            # compiler for what this tag declares it needs?
+            #
+            # Asked HERE, twenty seconds in, because the build cannot ask it:
+            # the crossing surfaces ~25 minutes into a matrix as
+            #
+            #   go: go.mod requires go >= 1.26.0 (running go 1.25.10; GOTOOLCHAIN=local)
+            #   make: *** [Makefile:398: bin/podman] Error 1
+            #
+            # which names a Makefile line and says nothing about Alpine at all.
+            # The answer is knowable the moment the tag is known, so it is worth
+            # three HTTP requests to turn a week of red builds into a sentence
+            # naming the branch to bump to.
+            #
+            # Reports; does NOT abort. Every component is resolved in the same
+            # run, and failing here would discard four good updates over one
+            # component's compiler floor. The build already degrades correctly
+            # on its own -- tag fails, head fails, hold at last known good --
+            # now that the manifest download above actually works. What was
+            # missing was never a gate, only a diagnosis.
+            floor_rc=0
+            floor_out="$(
+              .github/scripts/toolchain-floor.sh check \
+                "${component}" "${repo}" "${tag}" 2>&1
+            )" || floor_rc=$?
+
+            # Re-emitted so the ::error::/::notice:: lines still annotate the
+            # run; capturing them above is only so the tracking issue can carry
+            # the actual version numbers rather than a pointer to a log.
+            printf '%s\n' "${floor_out}"
+
+            case "${floor_rc}" in
+              0) ;;
+              70)
+                # The annotation prefix is for the run log, not for an issue
+                # body. Only ::error:: lines reach here -- a satisfied or
+                # skipped check exits 0 -- so a global literal replace is exact.
+                floor_unmet+="${floor_out//::error::/}"$'\n'
+                ;;
+              *)
+                # A floor that cannot be resolved -- a CDN hiccup, a repository
+                # without the manifest this infers -- is unknown, not unmet.
+                # Treating it as unmet would file an issue every time Alpine's
+                # mirror was slow.
+                echo "::warning::${component}: toolchain floor check did not complete (exit ${floor_rc})"
+                ;;
+            esac
 
             old_version="$(jq -r --arg c "${component}" \
               '.components[$c].version // ""' "${previous}")"
@@ -314,6 +398,10 @@ jobs:
             printf '%s' "${summary}"
             echo
             echo "SUMMARY_EOF"
+            echo "floor_unmet<<FLOOR_EOF"
+            printf '%s' "${floor_unmet}"
+            echo
+            echo "FLOOR_EOF"
           } >> "${GITHUB_OUTPUT}"
 
           jq . <<< "${components}"
@@ -398,6 +486,67 @@ jobs:
               'title contains the prerelease tag itself.' \
               ''
             printf '%s\n' "${SUMMARY}"
+          )"
+
+          existing="$(
+            gh issue list --repo "${GITHUB_REPOSITORY}" \
+              --state open --search "${title} in:title" \
+              --json number --jq '.[0].number // ""'
+          )"
+
+          if [[ -n "${existing}" ]]; then
+            gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" --body "${body}" --label automated
+          fi
+
+  # A component whose upstream has outgrown the pinned Alpine branch.
+  #
+  # Deliberately NOT gated on `release`. The build holding a component at its
+  # last known good version is the correct outcome and produces a green run,
+  # so without this the only trace of the crossing is a notice in a log nobody
+  # opens -- which is exactly how the last two crossings each went unnoticed
+  # for weeks. The fix is a one-line recipe edit; the hard part was ever
+  # learning it was needed.
+  announce-toolchain-floor:
+    name: Open a tracking issue for the toolchain floor
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.floor_unmet != ''
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: File or update the tracking issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLOOR: ${{ needs.detect.outputs.floor_unmet }}
+        run: |
+          set -euo pipefail
+
+          title='Upstream has outgrown the pinned Alpine branch'
+
+          body="$(
+            printf '%s\n' \
+              'A component now requires a newer compiler than the Alpine' \
+              'branch its melange recipe pins can ever ship. A stable Alpine' \
+              'branch freezes its compilers for the life of the branch, so' \
+              'this does not resolve itself -- the pin has to move.' \
+              '' \
+              'Until it does, the build will fail from the release tag and' \
+              'hold the component at its last known good version, which looks' \
+              'like a successful release from the outside.' \
+              '' \
+              'To fix: bump the dl-cdn.alpinelinux.org/alpine/vX.Y pin in the' \
+              'named recipe, and the alpine:X.Y images in' \
+              'test-podman-packages.yaml and promote-prerelease.yaml with it.' \
+              'The .github/scripts/toolchain-floor.sh check below verifies the' \
+              'new pin before you push it.' \
+              ''
+            printf '%s\n' "${FLOOR}"
           )"
 
           existing="$(
