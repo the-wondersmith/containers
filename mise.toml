@@ -958,6 +958,24 @@ cd "{{ config_root }}"
 .github/scripts/release-identity-test.sh
 '''
 
+[tasks."test:toolchain-floor"]
+description = "Verify the Alpine pin still satisfies upstream toolchain floors"
+hide = true
+# A stable Alpine branch freezes its compilers for life while upstream raises
+# its floor on its own schedule, so the two cross roughly once a year. The
+# crossing has no local symptom at all -- it surfaces 25 minutes into a build
+# matrix as a Makefile line number that never mentions Alpine. The suite drives
+# the comparison over injected versions, so it is offline and deterministic,
+# and it carries both real crossings this repository has already lived through
+# as regressions.
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cd "{{ config_root }}"
+
+.github/scripts/toolchain-floor-test.sh
+'''
+
 [tasks.tests]
 description = "Run all tests"
 # The acceptance suite needs a built package and privileged container access;
@@ -968,6 +986,7 @@ depends = [
     "test:release-identity",
     "test:kvm-probe",
     "test:version-skew",
+    "test:toolchain-floor",
 ]
 run = '''
 #!/usr/bin/env bash
@@ -984,7 +1003,7 @@ echo "  docker run --rm --privileged --cgroupns=host \\"
 echo "    -v \"\$PWD/dist/\$(uname -m):/pkg:ro\" \\"
 echo "    -v \"\$PWD/.github/scripts:/scripts:ro\" \\"
 echo "    -e DISTRO=alpine -e COMPONENTS=\"\$(cat manifest.json)\" \\"
-echo "    alpine:3.23 /bin/sh /scripts/acceptance.sh"
+echo "    alpine:3.24 /bin/sh /scripts/acceptance.sh"
 echo
 echo "The Proxmox image has its own suite (.github/scripts/pve-acceptance.sh),"
 echo "which drives containers from the host and needs a built image plus a"

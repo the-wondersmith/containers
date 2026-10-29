@@ -174,12 +174,12 @@ jobs:
           - distro: alpine
             arch: x86_64
             pattern: '*-x86_64.apk'
-            image: alpine:3.23
+            image: alpine:3.24
             runner: ubuntu-latest
           - distro: alpine
             arch: aarch64
             pattern: '*-aarch64.apk'
-            image: alpine:3.23
+            image: alpine:3.24
             runner: ubuntu-24.04-arm
 
     steps:

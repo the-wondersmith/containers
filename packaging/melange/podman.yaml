@@ -58,10 +58,24 @@ environment:
       - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
       - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
     repositories:
-      # Alpine 3.23, not 3.21: podman 6 requires Go >= 1.25.9 and 3.21 ships
-      # only 1.23.9. 3.23 ships 1.25.10.
-      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
-      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+      # The branch is chosen by what Go it ships, and nothing else. A stable
+      # Alpine branch freezes Go at one minor version for its whole life, so
+      # podman outgrows a branch roughly once a year and the symptom is always
+      # the same:
+      #
+      #   go: go.mod requires go >= X (running go Y; GOTOOLCHAIN=local)
+      #
+      # Alpine's `go` package sets GOTOOLCHAIN=local in go.env, so Go will not
+      # fetch a newer toolchain to rescue the build -- it just fails, ~25
+      # minutes in. History: 3.21 shipped 1.23.9 and podman 6 needed >= 1.25.9;
+      # 3.23 shipped 1.25.10 and podman 6.1.4 moved the floor to >= 1.26.0.
+      # 3.24 ships 1.26.10.
+      #
+      # .github/scripts/toolchain-floor.sh checks this pin against the resolved
+      # upstream tag's go.mod before a build starts, so the next time the floor
+      # moves it is a 20-second failure naming the branch to bump to.
+      - https://dl-cdn.alpinelinux.org/alpine/v3.24/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.24/community
     packages:
       - bash
       - build-base

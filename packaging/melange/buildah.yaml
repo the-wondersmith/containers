@@ -46,8 +46,8 @@ environment:
       - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616adfeb.rsa.pub
       - https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub
     repositories:
-      - https://dl-cdn.alpinelinux.org/alpine/v3.23/main
-      - https://dl-cdn.alpinelinux.org/alpine/v3.23/community
+      - https://dl-cdn.alpinelinux.org/alpine/v3.24/main
+      - https://dl-cdn.alpinelinux.org/alpine/v3.24/community
     packages:
       - bash
       - build-base
