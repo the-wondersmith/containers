@@ -34,6 +34,10 @@ set -euo pipefail
 readonly EXIT_USAGE=64
 readonly EXIT_UNMET=70 # the floor is not satisfied; a tag build will fail
 
+# Internal to upstream_file, never an exit status of this script: the request
+# succeeded in reaching GitHub and GitHub said the file is not there.
+readonly RC_ABSENT=2
+
 usage() {
   cat << 'EOF'
 Usage:
@@ -151,11 +155,43 @@ alpine_version() {
 #
 # The raw media type returns file content directly; without it /contents returns
 # a JSON envelope with base64 in it, which would need decoding for no benefit.
+#
+# Returns 0 with the content, RC_ABSENT for a confirmed 404, or 1 for anything
+# else. That distinction is the whole point of the function: `gh api` exits 1
+# for every failure alike, so the status on its own cannot tell "this project
+# has no Cargo.toml" from "GitHub answered 502". Collapsing the two makes a
+# transient outage look like a deliberate skip, which is the quiet kind of wrong
+# -- the run stays green and the floor stays unknown. gh puts the HTTP status in
+# its stderr ("gh: Not Found (HTTP 404)"), so stderr is captured, not discarded.
 upstream_file() {
   local repo="${1}" path="${2}" ref="${3}"
+  local errors content status=0
 
-  gh api -H "Accept: application/vnd.github.raw" \
-    "repos/${repo}/contents/${path}?ref=${ref}" 2> /dev/null
+  errors="$(mktemp)"
+
+  content="$(
+    gh api -H "Accept: application/vnd.github.raw" \
+      "repos/${repo}/contents/${path}?ref=${ref}" 2> "${errors}"
+  )" || status=$?
+
+  if ((status != 0)); then
+    if grep -q '(HTTP 404)' "${errors}"; then
+      status="${RC_ABSENT}"
+    else
+      # Nothing downstream can use this, so it goes to the log verbatim rather
+      # than being folded into a message that would only lose detail.
+      cat "${errors}" >&2
+      status=1
+    fi
+  fi
+
+  rm -f "${errors}"
+
+  if ((status == 0)); then
+    printf '%s\n' "${content}"
+  fi
+
+  return "${status}"
 }
 
 # The `go` directive from a go.mod.
@@ -240,18 +276,34 @@ check() {
 
   if [[ -z "${have}" ]]; then
     if ! have="$(alpine_version "${branch}" "${toolchain}")"; then
-      echo "::error::${component}: Alpine ${branch} has no ${toolchain} package" >&2
+      # Phrased as a failure to resolve rather than as absence: a CDN that did
+      # not answer and a branch that genuinely has no such package look the
+      # same from here, and only one of them is a fact.
+      echo "::error::${component}: could not resolve the ${toolchain} version Alpine ${branch} ships" >&2
       return 1
     fi
   fi
 
   if [[ -z "${need}" ]]; then
     local content
-    if ! content="$(upstream_file "${repo}" "${manifest}" "${ref}")" \
-      || [[ -z "${content}" ]]; then
-      echo "::notice::${component}: no ${manifest} at ${repo}@${ref}; skipping"
-      return 0
-    fi
+    local fetch=0
+
+    content="$(upstream_file "${repo}" "${manifest}" "${ref}")" || fetch=$?
+
+    case "${fetch}" in
+      0) ;;
+      "${RC_ABSENT}")
+        echo "::notice::${component}: no ${manifest} at ${repo}@${ref}; skipping"
+        return 0
+        ;;
+      *)
+        # Deliberately an error and not a skip. The floor is unknown, which is
+        # not the same as absent, and the watcher turns a nonzero exit into a
+        # visible "did not complete" warning.
+        echo "::error::${component}: could not fetch ${manifest} from ${repo}@${ref}" >&2
+        return 1
+        ;;
+    esac
 
     case "${toolchain}" in
       go) need="$(go_floor "${content}")" ;;
@@ -295,4 +347,10 @@ main() {
   esac
 }
 
-main "$@"
+# Guarded so the tests can source this file and call the readers directly --
+# go_floor, rust_floor and alpine_version are where a silent empty string would
+# make every injected-version check pass while the real thing resolved nothing.
+# Without the guard, sourcing would run main with the test's own argv.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
