@@ -497,6 +497,13 @@ jobs:
           if [[ -n "${existing}" ]]; then
             gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
           else
+            # `gh issue create` resolves labels before it creates anything, so
+            # a label that does not exist discards the issue rather than just
+            # its metadata -- and this job is the only notice its condition
+            # ever gets. --force is create-or-update, so repeating it is free.
+            gh label create automated --repo "${GITHUB_REPOSITORY}" --force \
+              --color ededed --description 'Filed by a workflow, not a human'
+
             gh issue create --repo "${GITHUB_REPOSITORY}" \
               --title "${title}" --body "${body}" --label automated
           fi
@@ -558,6 +565,13 @@ jobs:
           if [[ -n "${existing}" ]]; then
             gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
           else
+            # `gh issue create` resolves labels before it creates anything, so
+            # a label that does not exist discards the issue rather than just
+            # its metadata -- and this job is the only notice its condition
+            # ever gets. --force is create-or-update, so repeating it is free.
+            gh label create automated --repo "${GITHUB_REPOSITORY}" --force \
+              --color ededed --description 'Filed by a workflow, not a human'
+
             gh issue create --repo "${GITHUB_REPOSITORY}" \
               --title "${title}" --body "${body}" --label automated
           fi
