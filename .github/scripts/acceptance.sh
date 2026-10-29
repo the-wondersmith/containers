@@ -101,12 +101,31 @@ group "versions match the requested component set"
 check_version() {
   _name="$1"
   _actual="$2"
-  _expected="$(printf '%s' "${COMPONENTS}" | jq -er --arg c "${_name}" '.[$c].version')"
+  _package="$(printf '%s' "${COMPONENTS}" | jq -er --arg c "${_name}" '.[$c].version')"
+  _source="$(printf '%s' "${COMPONENTS}" | jq -er --arg c "${_name}" '.[$c].source')"
+  _expected="${_package}"
 
-  if [ "${_actual}" = "${_expected}" ]; then
-    ok "${_name} ${_actual}"
-  else
+  # A head-fallback build cannot satisfy an exact match, and the mismatch is not
+  # evidence of anything wrong. The `_gitYYYYMMDDHHMMSS` suffix is ours, added
+  # when a release tag fails to compile and the build falls back to the branch
+  # tip; the binary keeps reporting whatever version upstream's own source
+  # declares at that commit, which is the release it was tagged after and has
+  # not been bumped past. aardvark-dns 2.1.0_git20261022135153 reports "2.1.0"
+  # and always will. Comparing against the base still pins the binary to the
+  # right release lineage, which is the part worth asserting.
+  if [ "${_source}" != tag ]; then
+    _expected="${_package%%_git*}"
+  fi
+
+  if [ "${_actual}" != "${_expected}" ]; then
     fail "${_name}: expected ${_expected}, got ${_actual}"
+  elif [ "${_source}" != tag ]; then
+    # Named rather than reported as a plain pass: the suite is the last gate
+    # before publish, and "aardvark-dns 2.1.0" alone would hide the fact that
+    # what is about to ship is an untagged snapshot.
+    ok "${_name} ${_actual} (${_source} build, shipping as ${_package})"
+  else
+    ok "${_name} ${_actual}"
   fi
 }
 
