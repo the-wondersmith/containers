@@ -406,18 +406,12 @@ else
   # wholesale would also hide a real regression, which is the opposite of what
   # this suite is for.
   #
-  # Exit 0 iff the output holds a pasta failure whose diagnostics (the non-blank
-  # lines after podman's "pasta failed with exit code N:" header) are all, and
-  # at least one, "Permission denied".
+  # The classifier lives in its own file so pasta-eacces-only-test.sh can run
+  # the exact program this suite uses, under the same BusyBox awk. It sits
+  # beside this script in the /scripts mount. A missing file makes awk exit
+  # non-zero, which classifies as a hard failure -- the safe direction.
   pasta_eacces_only() {
-    awk '
-      /pasta failed with exit code [0-9]+:[[:space:]]*$/ { inblock = 1; seen = 1; next }
-      inblock && NF {
-        n++
-        if ($0 !~ /: Permission denied$/) bad = 1
-      }
-      END { exit !(seen && n > 0 && !bad) }
-    ' "$1"
+    awk -f "$(dirname "$0")/pasta-eacces-only.awk" "$1"
   }
 
   rootless_net_assert() {

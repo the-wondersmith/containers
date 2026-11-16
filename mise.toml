@@ -976,6 +976,22 @@ cd "{{ config_root }}"
 .github/scripts/toolchain-floor-test.sh
 '''
 
+[tasks."test:pasta-eacces-only"]
+description = "Verify the Alpine pasta known-failure classifier"
+hide = true
+# The classifier decides whether a failed rootless-networking assertion may let
+# an Alpine release through, and the acceptance run only ever shows it whatever
+# the current runner image produces -- widening it to accept everything would
+# stay green there. The suite pins both directions with captured pasta output,
+# under BusyBox awk (via docker when busybox is not on PATH).
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cd "{{ config_root }}"
+
+.github/scripts/pasta-eacces-only-test.sh
+'''
+
 [tasks.tests]
 description = "Run all tests"
 # The acceptance suite needs a built package and privileged container access;
@@ -987,6 +1003,7 @@ depends = [
     "test:kvm-probe",
     "test:version-skew",
     "test:toolchain-floor",
+    "test:pasta-eacces-only",
 ]
 run = '''
 #!/usr/bin/env bash
