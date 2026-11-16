@@ -387,16 +387,39 @@ else
   # mode, and userns limits.
   #
   # Alpine 3.24 ships a much newer pasta (2026_05_26), which may well have fixed
-  # it. The branch below is kept because it is gated on the exact failure
-  # SIGNATURE rather than on a version string: if 3.24's pasta works the
-  # assertion simply passes and this never fires. Removing it on the assumption
-  # that the bump fixed things would turn a known environment failure back into
-  # a release blocker without anyone having checked.
+  # it. The branch below is kept because it is gated on the failure's SHAPE
+  # rather than on a version string: if pasta works the assertion simply passes
+  # and this never fires. Removing it on the assumption that a bump fixed things
+  # would turn a known environment failure back into a release blocker without
+  # anyone having checked.
   #
-  # So a pasta failure matching that exact signature is recorded as a known
-  # failure rather than blocking the release, and ANY other failure still fails.
-  # Skipping the assertion wholesale would also hide a real regression, which is
-  # the opposite of what this suite is for.
+  # The shape is "pasta exited non-zero and EVERY diagnostic it printed is an
+  # EACCES". Which paths get denied is a property of the host kernel, not of
+  # pasta or this package: on ubuntu-24.04 runners pasta reported
+  # /proc/sys/net/ipv4/ip_local_port_range AND its netns / pid file under
+  # /run/user/<uid>; on ubuntu-26.04 only the latter. Keying on one specific
+  # message broke on that runner-image change, so no specific path is matched.
+  #
+  # So a pasta failure of that shape is recorded as a known failure rather than
+  # blocking the release, and ANY other failure -- including a pasta failure with
+  # even one non-EACCES diagnostic -- still fails. Skipping the assertion
+  # wholesale would also hide a real regression, which is the opposite of what
+  # this suite is for.
+  #
+  # Exit 0 iff the output holds a pasta failure whose diagnostics (the non-blank
+  # lines after podman's "pasta failed with exit code N:" header) are all, and
+  # at least one, "Permission denied".
+  pasta_eacces_only() {
+    awk '
+      /pasta failed with exit code [0-9]+:[[:space:]]*$/ { inblock = 1; seen = 1; next }
+      inblock && NF {
+        n++
+        if ($0 !~ /: Permission denied$/) bad = 1
+      }
+      END { exit !(seen && n > 0 && !bad) }
+    ' "$1"
+  }
+
   rootless_net_assert() {
     _rna_label="$1"
     _rna_netarg="$2"
@@ -411,9 +434,9 @@ else
     if [ "${_rna_status}" -eq 0 ]; then
       ok "${_rna_label}"
     elif [ "${DISTRO}" = alpine ] \
-      && grep -q 'ip_local_port_range: Permission denied' "${_rna_out}"; then
-      # Host networking cannot produce this signature, so this branch cannot mask
-      # a failure of the part the package owns.
+      && pasta_eacces_only "${_rna_out}"; then
+      # Host networking never starts pasta, so this branch cannot mask a failure
+      # of the part the package owns.
       echo "::warning::${_rna_label}: known Alpine pasta failure, not treated as a release blocker"
       echo "KNOWN-FAIL: ${_rna_label} (Alpine rootless pasta in-container)"
       sed 's/^/  /' "${_rna_out}" | tail -6 >&2 || true
