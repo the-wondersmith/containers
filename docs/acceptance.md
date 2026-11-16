@@ -49,15 +49,18 @@ The rootless assertions are deliberately in two parts.
 **What the environment owns** is pasta. Alpine 3.23 ships pasta `2025_09_19` and rootless pasta does not work inside this
 harness; Debian's `2025_05_03` does. Everything else measured is identical between the two: `newuidmap` privileges
 (capabilities on Alpine, setuid-root on Debian, both effective), the full subuid range mapped, `/dev/net/tun`, the runtime
-directory mode, and the userns limits. pasta fails within a millisecond of starting, with `EACCES` on
-`/proc/sys/net/ipv4/ip_local_port_range` and on the netns path.
+directory mode, and the userns limits. pasta fails within a millisecond of starting, with `EACCES` on the netns / pid-file
+paths it is handed under `/run/user/<uid>`.
 
 This was confirmed not to be a packaging problem by installing **Alpine's own podman 5.7.0** into the same privileged
 container, where it fails the same way. Nothing in this package is involved in the difference.
 
-So a pasta failure matching that exact signature is recorded as `KNOWN-FAIL` with a workflow warning rather than blocking
-the release. **Any other failure still fails**, and host networking cannot produce that signature, so the tolerance cannot
-mask a regression in the part the package is responsible for. Skipping the assertion outright would have hidden real
+*Which* paths are denied depends on the host kernel, not on pasta or this package: on `ubuntu-24.04` runners pasta also
+reported `EACCES` on `/proc/sys/net/ipv4/ip_local_port_range`; on `ubuntu-26.04` it does not. The check therefore matches
+the failure's shape, not any particular message: **pasta exited non-zero and every diagnostic line it printed is a
+`Permission denied`**. That shape is recorded as `KNOWN-FAIL` with a workflow warning rather than blocking the release.
+**Any other failure still fails** — including a pasta failure with even one non-`EACCES` diagnostic — and host networking
+never starts pasta, so the tolerance cannot mask a regression in the part the package is responsible for. Skipping the assertion outright would have hidden real
 regressions too, which is the opposite of what this suite exists for.
 
 Once Alpine's pasta works in a nested container — or the suite gains a non-containerised Alpine target — the tolerance
